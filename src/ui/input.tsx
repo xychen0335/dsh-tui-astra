@@ -8,7 +8,7 @@
  * @module dsh-tui-astra/ui/input
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { Box, Text, useInput } from 'ink'
 import { STATIC_COMMANDS, matchingCommands } from './commands.ts'
@@ -43,6 +43,9 @@ export function Input({
   const [draft, setDraft] = useState('')
   const [selected, setSelected] = useState(0)
   const [paletteDismissed, setPaletteDismissed] = useState(false)
+  const lastPaletteRows = useRef<number | undefined>(undefined)
+  const onPaletteRowsChangeRef = useRef(onPaletteRowsChange)
+  onPaletteRowsChangeRef.current = onPaletteRowsChange
   const matches = useMemo(
     () => paletteDismissed ? [] : matchingCommands(value, commands),
     [commands, paletteDismissed, value],
@@ -54,8 +57,10 @@ export function Input({
   }, [value])
 
   useEffect(() => {
-    onPaletteRowsChange?.(matches.length)
-  }, [matches.length, onPaletteRowsChange])
+    if (onPaletteRowsChangeRef.current === undefined || lastPaletteRows.current === matches.length) return
+    lastPaletteRows.current = matches.length
+    onPaletteRowsChangeRef.current(matches.length)
+  }, [matches.length])
 
   useInput((input, key) => {
     // Mouse reporting is enabled for transcript wheel/trackpad scrolling.

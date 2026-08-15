@@ -4,7 +4,10 @@ import { homedir } from 'node:os'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { PassThrough } from 'node:stream'
 import { zstdCompressSync } from 'node:zlib'
+import { createElement, useState } from 'react'
+import { render } from 'ink'
 import type { HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
 import { parseArgs } from '../src/config.ts'
 import { customProviderConfig } from '../src/runtime-provider.ts'
@@ -13,6 +16,7 @@ import { Store } from '../src/store.ts'
 import { listSessions, loadSession, projectKey, scanZstdFrames } from '../src/sessions.ts'
 import { activityRows } from '../src/ui/activity.tsx'
 import { chatRows, wrapRows } from '../src/ui/chat.tsx'
+import { Input } from '../src/ui/input.tsx'
 import {
   LOCAL_COMMANDS,
   mergeCommands,
@@ -872,4 +876,64 @@ test('activity rows stay terse and reserve red for errors', () => {
     { text: '• bash ls', color: 'gray' },
     { text: '× failed', color: 'red' },
   ])
+})
+
+test('input palette height reports once across parent rerenders', async () => {
+  const stdin = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    setRawMode: (enabled: boolean) => void
+    ref: () => void
+    unref: () => void
+  }
+  stdin.isTTY = true
+  stdin.setRawMode = () => {}
+  stdin.ref = () => {}
+  stdin.unref = () => {}
+  const stdout = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    columns: number
+    rows: number
+  }
+  stdout.isTTY = false
+  stdout.columns = 80
+  stdout.rows = 24
+  const stderr = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    columns: number
+    rows: number
+  }
+  stderr.isTTY = false
+  stderr.columns = 80
+  stderr.rows = 24
+
+  const reports: number[] = []
+  let rerender: (() => void) | undefined
+  function Probe(): ReturnType<typeof createElement> {
+    const [, setTick] = useState(0)
+    rerender = () => { setTick((current) => current + 1) }
+    return createElement(Input, {
+      onSubmit: () => {},
+      onPaletteRowsChange: (rows) => {
+        reports.push(rows)
+        setTick((current) => current + 1)
+      },
+      commands: [],
+    })
+  }
+
+  const instance = render(createElement(Probe), {
+    stdin,
+    stdout,
+    stderr,
+    exitOnCtrlC: false,
+  })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    rerender?.()
+    rerender?.()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(reports, [0])
+  } finally {
+    instance.unmount()
+  }
 })

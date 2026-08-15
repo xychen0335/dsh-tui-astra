@@ -64,15 +64,21 @@ export function useLineScroll(rows: readonly Row[], maxVisible: number): LineScr
     const delta = rows.length - previousLength.current
     previousLength.current = rows.length
     if (pinnedRef.current) {
-      setOffset(0)
+      setOffset((current) => current === 0 ? current : 0)
     } else if (delta > 0) {
       // Content above the window grows: push the window down by the delta so
       // the same rows stay visible, but never below the clamp.
-      setOffset((current) => Math.min(current + delta, Math.max(0, rows.length - visibleCapacity)))
+      setOffset((current) => {
+        const next = Math.min(current + delta, Math.max(0, rows.length - visibleCapacity))
+        return current === next ? current : next
+      })
     } else {
-      setOffset((current) => Math.min(current, Math.max(0, rows.length - visibleCapacity)))
+      setOffset((current) => {
+        const next = Math.min(current, Math.max(0, rows.length - visibleCapacity))
+        return current === next ? current : next
+      })
     }
-  }, [rows.length, visibleCapacity, rows])
+  }, [rows.length, visibleCapacity])
 
   const scrollUp = useCallback((lines = 1) => {
     setOffset((current) => Math.min(current + Math.max(1, lines), Math.max(0, rows.length - visibleCapacity)))
