@@ -13,6 +13,9 @@
 - id: sdk-jsonrpc-server
   name: '../lib/runtime-server.js'
 
+- id: commands
+  name: '@deepseek-ai/dsh-commands'
+
 - id: llm-deepseek
   name: '@deepseek-ai/dsh-llm-deepseek'
   config:
@@ -90,3 +93,6 @@
     retainRatio: 0.16
     maxTokens: 8192
     compactionRetries: 1
+
+- id: command-compact
+  name: '@deepseek-ai/dsh-command-compact'

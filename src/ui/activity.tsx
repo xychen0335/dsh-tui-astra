@@ -12,6 +12,7 @@ import type { Row, RowColor } from './scroll.ts'
 
 const ICONS: Record<ActivityKind, string> = {
   tool: '•',
+  command: '›',
   turn: '◦',
   step: '  ',
   subagent: '◦',
@@ -22,6 +23,7 @@ const ICONS: Record<ActivityKind, string> = {
 
 const KIND_COLORS: Record<ActivityKind, RowColor> = {
   tool: 'gray',
+  command: 'blue',
   turn: 'gray',
   step: 'gray',
   subagent: 'gray',

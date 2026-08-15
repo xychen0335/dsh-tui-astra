@@ -11,6 +11,7 @@
  */
 
 import type { HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
+import type {} from '@deepseek-ai/dsh-commands'
 import type { ContentBlock, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, TodoItem } from '@deepseek-ai/dsh-session'
 
@@ -23,6 +24,8 @@ export type UiAction =
   | { kind: 'assistant-done'; usage?: TokenUsage }
   | { kind: 'tool-call'; callId: string; name: string; args: string }
   | { kind: 'tool-result'; callId: string; ok: boolean; summary: string }
+  | { kind: 'command-start'; commandId: string; name: string; args?: string }
+  | { kind: 'command-done'; commandId: string; name?: string; ok: boolean; text?: string }
   | { kind: 'todos'; todos: readonly TodoItem[] }
   | { kind: 'context'; provider: string; model: string }
   | { kind: 'turn'; text: string }
@@ -98,6 +101,20 @@ export function classifySessionEvent(event: SessionEvent): UiAction[] {
         summary: toolResultSummary(event.data.message.content),
       }]
     }
+    case 'command/run':
+      return [{
+        kind: 'command-start',
+        commandId: String(event.data.commandId),
+        name: event.data.name,
+        ...(event.data.args === undefined ? {} : { args: event.data.args }),
+      }]
+    case 'command/done':
+      return [{
+        kind: 'command-done',
+        commandId: String(event.data.commandId),
+        ok: event.data.kind === 'success',
+        ...(event.data.text === undefined ? {} : { text: event.data.text }),
+      }]
     case 'todo/write':
       return [{ kind: 'todos', todos: event.data.todos }]
     case 'request/context':

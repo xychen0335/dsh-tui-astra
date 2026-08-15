@@ -13,6 +13,14 @@
 import { randomUUID } from 'node:crypto'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import type { HarnessClientOptions, HarnessNotification, NotificationSubscription } from '@deepseek-ai/dsh-sdk-client'
+import {
+  decodeCommandsExecute,
+  decodeCommandsList,
+} from './command-protocol.ts'
+import type {
+  CommandsExecuteResult,
+  RuntimeCommandDescriptor,
+} from './command-protocol.ts'
 
 /** Launch plus session-route settings for one bridge. */
 export interface BridgeOptions {
@@ -133,13 +141,33 @@ export class HarnessBridge {
    * @returns the durable inbox message id.
    */
   async send(text: string): Promise<string> {
+    const client = await this.activeClient()
+    return client.prompt(this.sessionId, [{ type: 'text', text }])
+  }
+
+  /** Discover direct human commands visible to the current session agent. */
+  async listCommands(): Promise<readonly RuntimeCommandDescriptor[]> {
+    const client = await this.activeClient()
+    return decodeCommandsList(await client.request('commands/list', { sessionId: this.sessionId }))
+  }
+
+  /** Execute one direct Harness command without sending it to the model. */
+  async executeCommand(line: string): Promise<CommandsExecuteResult> {
+    const client = await this.activeClient()
+    return decodeCommandsExecute(await client.request('commands/execute', {
+      sessionId: this.sessionId,
+      line,
+    }))
+  }
+
+  private async activeClient(): Promise<HarnessClient> {
     // The input remains usable while Esc replaces the runtime. Preserve the
     // first follow-up instead of rejecting it during that short hand-off.
     const restart = this.restartTask
     if (restart !== undefined) await restart
     const client = this.client
     if (client === undefined) throw new Error('runtime is not running')
-    return client.prompt(this.sessionId, [{ type: 'text', text }])
+    return client
   }
 
   private async deliver(subscription: NotificationSubscription): Promise<void> {

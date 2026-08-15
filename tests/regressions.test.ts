@@ -20,7 +20,11 @@ import {
 } from '../src/ui/commands.ts'
 import { nextGraphemeBoundary, previousGraphemeBoundary } from '../src/ui/input.tsx'
 import { relativeTime, shortSessionId } from '../src/ui/session-picker.tsx'
-import { createOrResumeRuntimeSession } from '../src/runtime-server.ts'
+import {
+  createOrResumeRuntimeSession,
+  executeRuntimeCommand,
+  listRuntimeCommands,
+} from '../src/runtime-server.ts'
 
 function notification(method: string, params: Record<string, unknown>): HarnessNotification {
   return { method, params } as HarnessNotification
@@ -100,6 +104,36 @@ test('terminal turn failures surface the provider error', () => {
     { kind: 'turn', text: 'turn 1 ended (error)' },
     { kind: 'error', text: 'missing credential (MISSING_CREDENTIAL)' },
   ])
+})
+
+test('command lifecycle events stay in the activity plane', () => {
+  const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
+  store.applyMany(classifySessionEvent({
+    type: 'command/run',
+    seq: 1,
+    time: 1,
+    data: {
+      commandId: 'command-1',
+      name: 'compact',
+      source: { kind: 'user' },
+    },
+  }))
+  store.applyMany(classifySessionEvent({
+    type: 'command/done',
+    seq: 2,
+    time: 2,
+    data: {
+      commandId: 'command-1',
+      kind: 'success',
+      text: 'No compactable history yet.',
+    },
+  }))
+
+  assert.deepEqual(store.getState().activities.map(({ kind, text, error }) => ({ kind, text, error })), [
+    { kind: 'command', text: '/compact', error: false },
+    { kind: 'command', text: 'compact → No compactable history yet.', error: false },
+  ])
+  assert.equal(store.getState().messages.length, 0)
 })
 
 test('store resets session state and tracks active subagents', () => {
@@ -250,6 +284,42 @@ test('replacement runtime resumes a persisted id instead of creating a collision
   await createOrResumeRuntimeSession(server, 'saved')
   assert.deepEqual(calls, ['resume'])
   assert.equal(server.sessions.get('saved')?.handle, handle)
+})
+
+test('runtime command helpers use the exact session agent and preserve direct results', async () => {
+  const agent = { id: 'session-command' }
+  const lines: string[] = []
+  const server = {
+    sessions: new Map([
+      ['session-command', { handle: { agent } }],
+    ]),
+    ctx: {
+      commands: {
+        list: (received: unknown) => {
+          assert.equal(received, agent)
+          return [{ name: 'compact', description: 'Compact history' }]
+        },
+        execute: async (received: unknown, line: string) => {
+          assert.equal(received, agent)
+          lines.push(line)
+          return {
+            commandId: 'command-1',
+            result: { kind: 'success' as const, text: 'done' },
+          }
+        },
+      },
+    },
+  }
+
+  assert.deepEqual(await listRuntimeCommands(server, 'session-command'), {
+    commands: [{ name: 'compact', description: 'Compact history' }],
+  })
+  assert.deepEqual(await executeRuntimeCommand(server, 'session-command', '/compact'), {
+    matched: true,
+    commandId: 'command-1',
+    result: { kind: 'success', text: 'done' },
+  })
+  assert.deepEqual(lines, ['/compact'])
 })
 
 test('cursor movement keeps Unicode graphemes intact', () => {

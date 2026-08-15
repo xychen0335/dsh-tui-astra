@@ -23,7 +23,7 @@ export interface ChatMessage {
   usage?: TokenUsage
 }
 
-export type ActivityKind = 'tool' | 'turn' | 'step' | 'subagent' | 'status' | 'note' | 'error'
+export type ActivityKind = 'tool' | 'command' | 'turn' | 'step' | 'subagent' | 'status' | 'note' | 'error'
 
 export interface Activity {
   id: number
@@ -56,6 +56,7 @@ export class Store {
   private readonly listeners = new Set<() => void>()
   private activitySeq = 0
   private readonly toolNames = new Map<string, string>()
+  private readonly commandNames = new Map<string, string>()
   private readonly activeSubagentIds = new Set<string>()
 
   constructor(initial: { provider: string; model: string; workspace: string }) {
@@ -114,6 +115,7 @@ export class Store {
       error: null,
     }
     this.toolNames.clear()
+    this.commandNames.clear()
     for (const listener of this.listeners) listener()
   }
 
@@ -121,6 +123,7 @@ export class Store {
   restoreSession(sessionId: string, actions: readonly UiAction[]): void {
     this.activeSubagentIds.clear()
     this.toolNames.clear()
+    this.commandNames.clear()
     this.state = {
       ...this.state,
       sessionId,
@@ -254,6 +257,18 @@ export class Store {
         const name = this.toolNames.get(action.callId) ?? 'tool'
         const label = action.ok ? `${name} → ok` : `${name} → error`
         this.pushActivity('tool', label, !action.ok, action.summary, true)
+        return true
+      }
+      case 'command-start': {
+        this.commandNames.set(action.commandId, action.name)
+        const args = action.args?.trim()
+        this.pushActivity('command', `/${action.name}${args === undefined || args === '' ? '' : ` ${args}`}`, false)
+        return true
+      }
+      case 'command-done': {
+        const name = action.name ?? this.commandNames.get(action.commandId) ?? 'command'
+        const suffix = action.text === undefined || action.text === '' ? (action.ok ? 'ok' : 'error') : action.text
+        this.pushActivity('command', `${name} → ${suffix}`, !action.ok)
         return true
       }
       case 'todos': {

@@ -8,7 +8,7 @@
  * @module dsh-tui-astra/ui/app
  */
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { Box, useInput } from 'ink'
 import type { HarnessBridge } from '../harness/bridge.ts'
@@ -24,6 +24,13 @@ import { SessionPicker } from './session-picker.tsx'
 import { classifySessionEvent } from '../harness/events.ts'
 import { listSessions, loadSession } from '../sessions.ts'
 import type { SavedSession } from '../sessions.ts'
+import {
+  LOCAL_COMMANDS,
+  PROMPT_COMMANDS,
+  mergeCommands,
+  parseCommandLine,
+} from './commands.ts'
+import type { SlashCommand } from './commands.ts'
 
 export interface AstraAppProps {
   store: Store
@@ -51,6 +58,7 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
   const { rows: termRows, columns: termColumns } = useTerminalSize()
   const [paletteRows, setPaletteRows] = useState(0)
   const [sessionPicker, setSessionPicker] = useState<SessionPickerState | null>(null)
+  const [runtimeCommands, setRuntimeCommands] = useState<readonly SlashCommand[]>([])
   const interrupting = useRef(false)
 
   const latestActivity = state.activities[state.activities.length - 1]
@@ -88,6 +96,27 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
     store.applyMany([{ kind: 'note', text: message }])
   }
 
+  const refreshRuntimeCommands = (): void => {
+    const sessionId = bridge.getSessionId()
+    void bridge.listCommands()
+      .then((commands) => {
+        if (bridge.getSessionId() !== sessionId) return
+        setRuntimeCommands(commands.map((command) => ({
+          name: command.name,
+          description: command.description,
+          ...(command.input === undefined ? {} : { inputHint: command.input.hint }),
+          source: 'runtime' as const,
+        })))
+      })
+      .catch((error: unknown) => {
+        note(`cannot load runtime commands: ${error instanceof Error ? error.message : String(error)}`)
+      })
+  }
+
+  useEffect(() => {
+    if (state.phase === 'idle' && runtimeCommands.length === 0) refreshRuntimeCommands()
+  }, [state.phase, state.sessionId, runtimeCommands.length])
+
   const resumeSession = (id: string): void => {
     if (state.phase === 'running' || state.phase === 'starting') {
       note('interrupt the current turn with Esc before resuming another session')
@@ -105,6 +134,8 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
         }
         bridge.newSession(session.id)
         store.restoreSession(session.id, session.events.flatMap(classifySessionEvent))
+        setRuntimeCommands([])
+        refreshRuntimeCommands()
         setSessionPicker(null)
         note(`resumed ${session.title ?? session.id} · ${session.workspace}`)
       })
@@ -137,8 +168,27 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
   }
 
   const handleSubmit = (text: string): void => {
-    if (text.startsWith('/')) {
-      handleCommand(text)
+    const parsed = parseCommandLine(text)
+    if (parsed !== undefined) {
+      const command = parsed.name === 'exit'
+        ? LOCAL_COMMANDS.find((candidate) => candidate.name === 'quit')
+        : commands.find((candidate) => candidate.name === parsed.name)
+      if (command === undefined) {
+        note(`unknown command: /${parsed.name} — type / to browse commands`)
+        return
+      }
+      if (command.source === 'runtime') {
+        void bridge.executeCommand(text)
+          .then((execution) => {
+            if (!execution.matched) note(`runtime command disappeared: /${parsed.name}`)
+            refreshRuntimeCommands()
+          })
+          .catch((error: unknown) => {
+            note(`/${parsed.name} failed: ${error instanceof Error ? error.message : String(error)}`)
+          })
+        return
+      }
+      handleCommand(parsed.name, parsed.rawInput)
       return
     }
     bridge.send(text).catch((error: unknown) => {
@@ -147,62 +197,66 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
     })
   }
 
-  const handleCommand = (text: string): void => {
-    const [command, ...rest] = text.trim().split(/\s+/)
+  const handleCommand = (command: string, rawInput: string): void => {
+    const rest = rawInput.trim().split(/\s+/).filter(Boolean)
     switch (command) {
-      case '/quit':
-      case '/exit':
+      case 'quit':
+      case 'exit':
         quit()
         return
-      case '/new': {
+      case 'new': {
         const id = rest[0]
         const sessionId = bridge.newSession(id)
         store.resetSession(sessionId)
+        setRuntimeCommands([])
+        refreshRuntimeCommands()
         note(id === undefined ? `started session ${sessionId}` : `switched to session ${id}`)
         return
       }
-      case '/resume': {
+      case 'resume': {
         const id = rest[0]
         if (id === undefined) openSessionPicker()
         else resumeSession(id)
         return
       }
-      case '/sessions':
+      case 'sessions':
         openSessionPicker()
         return
-      case '/clear':
+      case 'clear':
         store.clearView()
         note('screen cleared · current session retained')
         return
-      case '/status':
+      case 'status':
         note(`${state.phase} · ${state.provider}/${state.model} · session ${state.sessionId ?? 'none'} · ${state.workspace}`)
         return
-      case '/session':
+      case 'session':
         note(`session: ${state.sessionId ?? 'none'}`)
         return
-      case '/model': {
+      case 'model': {
         const requested = rest[0]
         if (requested === undefined) note(`model: ${state.provider}/${state.model}`)
         else note(`model changes require a new runtime: restart with dsh --model ${requested}`)
         return
       }
-      case '/init':
+      case 'init':
         void bridge.send('Inspect this repository and create or update its concise agent instructions file with verified build, test, and project conventions.')
           .catch((error: unknown) => note(`init failed: ${error instanceof Error ? error.message : String(error)}`))
         return
-      case '/review': {
-        const scope = rest.join(' ') || 'the current uncommitted changes'
+      case 'review': {
+        const scope = rawInput.trim() || 'the current uncommitted changes'
         void bridge.send(`Review ${scope}. Focus on correctness, regressions, security, and missing tests. Report findings by severity before suggesting fixes.`)
           .catch((error: unknown) => note(`review failed: ${error instanceof Error ? error.message : String(error)}`))
         return
       }
-      case '/help':
+      case 'help':
         note(KEY_HELP)
         return
       default:
-        note(`unknown command: ${command} — type / to browse commands`)
+        note(`unknown command: /${command} — type / to browse commands`)
     }
   }
+
+  const commands = mergeCommands(LOCAL_COMMANDS, PROMPT_COMMANDS, runtimeCommands)
 
   return (
     <Box flexDirection="column">
@@ -222,6 +276,7 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
         onSubmit={handleSubmit}
         onPaletteRowsChange={setPaletteRows}
         isActive={sessionPicker === null}
+        commands={commands}
       />
       <Status state={state} width={termColumns} />
     </Box>
