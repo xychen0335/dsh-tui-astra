@@ -306,11 +306,12 @@ src/
     events.ts             Harness 通知到 UI action 的转换
   store.ts                TUI 状态与会话恢复
   ui/
-    app.tsx               布局、全局按键和斜杠命令
-    chat.tsx              对话渲染和宽度换行
-    input.tsx             输入框、命令面板和输入历史
-    session-picker.tsx    历史会话选择器
-    activity.tsx          工具和运行阶段动态
+    app.ts                pi-tui 主屏幕、焦点、overlay 和斜杠命令
+    chat.ts               稳定文档、流式尾部和宽度换行
+    input.ts              Unicode grapheme 边界辅助
+    session-picker.ts     历史会话 overlay
+    model-picker.ts       模型/Provider 列表和统一表单 overlay
+    activity.ts           工具和运行阶段动态
     row.ts                对话和活动行的共享显示类型
 runtime/
   tui.cordis.yml          Harness 运行时组合
