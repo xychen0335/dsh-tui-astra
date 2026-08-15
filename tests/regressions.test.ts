@@ -299,6 +299,8 @@ test('slash command catalog merges runtime entries without overriding local comm
   ])
   assert.equal(commands.find((command) => command.name === 'clear')?.source, 'local')
   assert.equal(commands.find((command) => command.name === 'compact')?.source, 'runtime')
+  assert.equal(commands.find((command) => command.name === 'model')?.description, 'search and switch the session model')
+  assert.equal(commands.find((command) => command.name === 'provider')?.description, 'add, edit, test, or delete model providers')
 })
 
 test('slash command discovery filters commands without swallowing arguments', () => {

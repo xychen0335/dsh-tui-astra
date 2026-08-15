@@ -49,7 +49,7 @@ export interface AstraAppProps {
 const KEY_HELP = [
   'keys: Esc interrupt · / menu · Tab complete · ↑/↓ select/history',
   'history: scroll/trackpad · Ctrl+↑/↓ line · PgUp/PgDn page · Home/End jump',
-  'commands: /new /resume /sessions /clear /status /session /model',
+  'commands: /new /resume /sessions /clear /status /session /model /provider',
   'agent: /init /review · exit: /quit · help: /help',
 ].join('\n')
 
@@ -60,6 +60,7 @@ interface SessionPickerState {
 }
 
 interface ModelPickerState extends RuntimeModelsResult {
+  initialView: 'models' | 'providers'
   providers: readonly RuntimeProviderDescriptor[]
   loading: boolean
   busy: boolean
@@ -210,8 +211,9 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
       })
   }
 
-  const openModelPicker = (): void => {
+  const openModelPicker = (initialView: 'models' | 'providers'): void => {
     setModelPicker({
+      initialView,
       current: { provider: state.provider, model: state.model },
       groups: [],
       failures: [],
@@ -221,10 +223,11 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
     })
     void Promise.all([bridge.listModels(), bridge.listProviders()])
       .then(([models, providers]) => {
-        setModelPicker({ ...models, providers, loading: false, busy: false })
+        setModelPicker({ ...models, providers, initialView, loading: false, busy: false })
       })
       .catch((error: unknown) => {
         setModelPicker({
+          initialView,
           current: { provider: state.provider, model: state.model },
           groups: [],
           failures: [],
@@ -262,7 +265,7 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
           return
         }
         const [models, providers] = await Promise.all([bridge.listModels(), bridge.listProviders()])
-        setModelPicker({ ...models, providers, loading: false, busy: false })
+        setModelPicker({ ...models, providers, initialView: 'providers', loading: false, busy: false })
         note(`provider saved · ${input.provider}`)
       })
       .catch((error: unknown) => {
@@ -277,7 +280,7 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
     void bridge.deleteProvider(provider)
       .then(async () => {
         const [models, providers] = await Promise.all([bridge.listModels(), bridge.listProviders()])
-        setModelPicker({ ...models, providers, loading: false, busy: false })
+        setModelPicker({ ...models, providers, initialView: 'providers', loading: false, busy: false })
         note(`provider deleted · ${provider}`)
       })
       .catch((error: unknown) => {
@@ -383,7 +386,7 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
       case 'model': {
         const requested = rest[0]
         if (requested === undefined) {
-          openModelPicker()
+          openModelPicker('models')
           return
         }
         const separator = requested.indexOf('/')
@@ -394,6 +397,9 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
         selectModel(requested.slice(0, separator), requested.slice(separator + 1))
         return
       }
+      case 'provider':
+        openModelPicker('providers')
+        return
       case 'init':
         void bridge.send('Inspect this repository and create or update its concise agent instructions file with verified build, test, and project conventions.')
           .catch((error: unknown) => note(`init failed: ${error instanceof Error ? error.message : String(error)}`))
@@ -430,6 +436,7 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
       )}
       {modelPicker !== null && (
         <ModelPicker
+          initialView={modelPicker.initialView}
           groups={modelPicker.groups}
           providers={modelPicker.providers}
           current={modelPicker.current}

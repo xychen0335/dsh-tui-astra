@@ -14,6 +14,7 @@ import { isMouseReport } from './terminal-input.ts'
 import { nextGraphemeBoundary, previousGraphemeBoundary } from './input.tsx'
 
 export interface ModelPickerProps {
+  initialView: 'models' | 'providers'
   groups: readonly RuntimeModelGroup[]
   providers: readonly RuntimeProviderDescriptor[]
   current: RuntimeModelSelection
@@ -88,6 +89,7 @@ export function matchesModelQuery(row: ModelRow, query: string): boolean {
 }
 
 export function ModelPicker({
+  initialView,
   groups,
   providers,
   current,
@@ -107,7 +109,7 @@ export function ModelPicker({
     name: model.name,
     ...(model.description === undefined ? {} : { description: model.description }),
   }))), [groups])
-  const [view, setView] = useState<View>('models')
+  const [view, setView] = useState<View>(initialView)
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(0)
   const [editingProvider, setEditingProvider] = useState<RuntimeProviderDescriptor | undefined>()
@@ -179,12 +181,6 @@ export function ModelPicker({
     if (loading || busy) return
 
     if (view !== 'editor') {
-      if (key.tab) {
-        setView(currentView => currentView === 'models' ? 'providers' : 'models')
-        setQuery('')
-        setSelected(0)
-        return
-      }
       const length = view === 'models' ? filteredModels.length : filteredProviders.length + 1
       if (key.upArrow && length > 0) {
         setSelected(index => (index - 1 + length) % length)
@@ -323,7 +319,7 @@ export function ModelPicker({
   const title = view === 'models' ? 'Models' : view === 'providers' ? 'Providers' : `Provider · ${editingProvider?.name ?? 'New'}`
   const hint = view === 'editor'
     ? (editingField ? 'Type value  Enter done  Esc cancel edit' : '↑↓ field  Enter edit/action  Esc providers')
-    : 'Tab models/providers  Type search  ↑↓ navigate  Enter open  Esc close'
+    : 'Type search  ↑↓ navigate  Enter open  Esc close'
 
   return (
     <Box flexDirection="column" marginX={1} borderStyle="round" borderColor={DEEPSEEK_BLUE} paddingX={1}>
@@ -378,7 +374,7 @@ function ModelRows({
   selected: number
   current: RuntimeModelSelection
 }): JSX.Element {
-  if (rows.length === 0) return <Text dimColor>  No matching models. Press Tab to configure a provider.</Text>
+  if (rows.length === 0) return <Text dimColor>  No matching models. Use /provider to configure providers.</Text>
   const maxVisible = 10
   const start = Math.max(0, Math.min(selected - Math.floor(maxVisible / 2), rows.length - maxVisible))
   const visible = rows.slice(start, start + maxVisible)

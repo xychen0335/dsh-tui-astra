@@ -26,7 +26,8 @@ export const LOCAL_COMMANDS: readonly SlashCommand[] = [
   { name: 'clear', description: 'clear the screen, keep the session', source: 'local' },
   { name: 'status', description: 'show runtime and workspace status', source: 'local' },
   { name: 'session', description: 'show the current session id', source: 'local' },
-  { name: 'model', inputHint: '[provider/model]', description: 'select or configure the session model', source: 'local' },
+  { name: 'model', inputHint: '[provider/model]', description: 'search and switch the session model', source: 'local' },
+  { name: 'provider', inputHint: '[name]', description: 'add, edit, test, or delete model providers', source: 'local' },
   { name: 'quit', description: 'exit dsh', source: 'local' },
 ]
 

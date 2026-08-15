@@ -173,8 +173,8 @@ dsh \
 ```
 
 CLI 和 Cordis 配置只传递环境变量名称，不复制 API Key 值。为避免凭证进入 shell
-history，不提供 `--api-key <value>` 参数。也可以在 TUI 中执行 `/model`，选择
-“Add or configure provider”，输入 route、model、endpoint、protocol 和 API Key；
+history，不提供 `--api-key <value>` 参数。也可以在 TUI 中执行 `/provider`，
+输入 route、model、endpoint、protocol 和 API Key；
 凭证写入 `$DSH_HOME/.credentials.yaml`，Provider 配置写入
 `$DSH_HOME/settings.yaml`，都在下一个请求生效，无需重启。
 
@@ -183,11 +183,11 @@ history，不提供 `--api-key <value>` 参数。也可以在 TUI 中执行 `/mo
 可跳过选择器直接切换。自定义 provider 必须显式指定模型；手工声明的新 route
 通常还需要 Base URL 和 protocol。
 
-`/model` 界面参考 Pi 的职责拆分：
+模型选择与 Provider 管理解耦：
 
-- **Models**：输入即搜索，`↑`/`↓` 选择，`Enter` 热切换；
-- **Providers**：按 `Tab` 进入，查看已配置、可用和缺少凭证的 Provider；
-- 在 Providers 中按 `Enter` 可编辑已有配置，API Key 只显示是否已配置；
+- **`/model`**：输入即搜索，`↑`/`↓` 选择，`Enter` 热切换；
+- **`/provider`**：查看已配置、可用和缺少凭证的 Provider；
+- 在 `/provider` 中按 `Enter` 可编辑已有配置，API Key 只显示是否已配置；
 - “Test connection / discover models” 不保存草稿，可先验证 endpoint、协议和 Key；
 - “Save configuration” 只保存，“Save and use” 保存后立即切换；
 - 自定义 Provider 可删除；当前正在使用的 Provider 需先切换到其他模型。
@@ -222,8 +222,9 @@ history，不提供 `--api-key <value>` 参数。也可以在 TUI 中执行 `/mo
 | `/clear` | 清空当前显示，不删除会话 |
 | `/status` | 显示运行阶段、模型、会话和工作目录 |
 | `/session` | 显示当前会话 ID |
-| `/model` | 打开交互式模型选择与 Provider 配置 |
+| `/model` | 打开模型搜索与热切换 |
 | `/model <provider>/<model>` | 直接热切换当前会话的模型 |
+| `/provider` | 新增、编辑、测试或删除 Provider 与凭证 |
 | `/init` | 让 agent 检查仓库并生成项目说明 |
 | `/review [scope]` | 让 agent 审查指定范围 |
 | `/compact` | 使用 Harness 原生 command 压缩较早的对话历史 |
