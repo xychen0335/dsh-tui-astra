@@ -5,6 +5,7 @@
  */
 
 import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -19,6 +20,8 @@ export interface CliOptions {
   maxTokens?: number
   /** Session id to reuse; omitted mints a fresh one. */
   session?: string
+  /** Shared durable-session root, aligned with the native Harness home. */
+  sessionRoot: string
   /** Cordis composition for the runtime. */
   cordis: string
   /** Runtime executable override (testing/advanced). */
@@ -29,6 +32,12 @@ export interface CliOptions {
 export function defaultCordisPath(): string {
   const here = dirname(fileURLToPath(import.meta.url))
   return join(here, '..', 'runtime', 'tui.cordis.yml')
+}
+
+/** Resolve the native Harness session root without hard-coding a user home. */
+export function defaultSessionRoot(): string {
+  const dshHome = process.env['DSH_HOME'] ?? join(homedir(), '.dsh')
+  return resolve(process.env['DSH_SESSION_ROOT'] ?? join(dshHome, 'sessions'))
 }
 
 /** Resolve the `dsh-jsonrpc-agent` bin from the installed demo package. */
@@ -52,9 +61,10 @@ export function resolveRuntimeBin(): string {
  */
 export function parseArgs(argv: readonly string[]): CliOptions {
   const options: CliOptions = {
-    workspace: resolve(process.cwd()),
+    workspace: resolve(process.env['DSH_CWD'] ?? process.cwd()),
     provider: 'deepseek-official',
     model: process.env['DSH_MODEL'] ?? 'deepseek-v4-flash',
+    sessionRoot: defaultSessionRoot(),
     cordis: defaultCordisPath(),
   }
 
@@ -120,9 +130,9 @@ export class HelpRequested extends Error {}
 
 /** The CLI help text. */
 export function helpText(): string {
-  return `dsh-tui-astra — a terminal TUI client for DeepSeek Harness
+  return `dsh — a terminal TUI client for DeepSeek Harness
 
-Usage: dsh-tui-astra [options]
+Usage: dsh [options]
 
 Options:
   --cwd <dir>           agent workspace (bash/fs root) [default: current dir]
@@ -139,11 +149,11 @@ Environment:
   DEEPSEEK_BASE_URL     optional endpoint override
   DSH_CWD               workspace when --cwd is absent
   DSH_MODEL             model when --model is absent
-  DSH_SESSION_ROOT      session JSONL directory (default ./.sessions)
+  DSH_HOME              Harness home [default: ~/.dsh]
+  DSH_SESSION_ROOT      session JSONL directory [default: $DSH_HOME/sessions]
 
 Keys inside the TUI:
-  Tab                   switch panel focus (input / chat / activity)
-  PageUp / PageDown     scroll the focused panel
+  PageUp / PageDown     scroll conversation history
   Ctrl+C                quit (closes the runtime cleanly)
   /new [id]             start a fresh session
   /quit                 quit
