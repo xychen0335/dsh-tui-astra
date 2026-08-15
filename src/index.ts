@@ -10,7 +10,7 @@ import { HelpRequested, helpText, parseArgs, resolveRuntimeBin } from './config.
 import type { CliOptions } from './config.ts'
 import { HarnessBridge } from './harness/bridge.ts'
 import { NotificationClassifier } from './harness/events.ts'
-import { mountApp } from './mount.tsx'
+import { mountApp } from './mount.ts'
 import { Store } from './store.ts'
 
 function fail(message: string): never {
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
     } catch {
       // Teardown is best effort; the runtime may already be gone.
     }
-    app?.unmount()
+    app?.stop()
     process.exit(0)
   }
   process.on('SIGTERM', () => { void quit() })

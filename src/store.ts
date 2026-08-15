@@ -3,13 +3,12 @@
  *
  * Applies classified {@link UiAction}s to a render snapshot and notifies
  * subscribers. Deliberately framework-free: the UI connects via
- * {@link useStore}. All state transitions happen in {@link applyMany};
+ * the imperative UI subscribes directly. All state transitions happen in {@link applyMany};
  * nothing outside this module mutates the snapshot.
  *
  * @module dsh-tui-astra/store
  */
 
-import { useSyncExternalStore } from 'react'
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { TodoItem } from '@deepseek-ai/dsh-session'
 import type { UiAction } from './harness/events.ts'
@@ -40,12 +39,9 @@ export interface UiState {
   phase: 'starting' | 'idle' | 'running' | 'error'
   sessionId: string | null
   /**
-   * Monotonic key for the append-only terminal transcript.
-   *
-   * Ink's Static component keeps an internal item-length cursor. A new
-   * generation remounts that component when the visible session is replaced
-   * or cleared, while already committed terminal output remains historical
-   * scrollback.
+   * Monotonic key for the live document. Main-screen rendering keeps older
+   * terminal scrollback intact while this key tells the imperative UI to
+   * rebuild its in-memory document after a session replacement or clear.
    */
   transcriptGeneration: number
   provider: string
@@ -178,9 +174,9 @@ export class Store {
   /**
    * Start a fresh visible transcript without changing the session.
    *
-   * Ink Static has already committed prior output to terminal scrollback, so
-   * this cannot retroactively erase that historical output. The generation
-   * lets the new batch render independently and accept future messages.
+   * Main-screen rendering has already committed prior output to terminal
+   * scrollback, so this cannot retroactively erase that historical output. The
+   * generation lets the new live document render independently.
    */
   clearView(): void {
     this.state = {
@@ -340,15 +336,6 @@ export class Store {
       : activities
     this.state = { ...this.state, activities: trimmed }
   }
-}
-
-/** React binding: re-render whenever the store snapshot changes. */
-export function useStore(store: Store): UiState {
-  return useSyncExternalStore(
-    (listener) => store.subscribe(listener),
-    () => store.getState(),
-    () => store.getState(),
-  )
 }
 
 function firstLine(text: string): string {

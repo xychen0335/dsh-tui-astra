@@ -36,7 +36,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/mark-bin-executable.mjs",
     "start": "node lib/index.js",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -81,12 +81,10 @@
     "@deepseek-ai/dsh-tool-skill": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tool-subagent": "0.1.0-rc.6",
     "@deepseek-ai/dsh-tool-todo": "0.1.0-rc.6",
-    "ink": "6.8.0",
-    "react": "19.2.8"
+    "@earendil-works/pi-tui": "0.84.2"
   },
   "devDependencies": {
     "@types/node": "26.2.0",
-    "@types/react": "^19.2.0",
     "tsx": "^4.20.0",
     "typescript": "^5.7.0"
   }
