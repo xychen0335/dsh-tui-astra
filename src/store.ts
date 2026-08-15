@@ -166,7 +166,6 @@ export class Store {
       ...this.state,
       messages: [],
       activities: [],
-      todos: [],
       error: null,
     }
     for (const listener of this.listeners) listener()

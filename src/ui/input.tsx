@@ -11,7 +11,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { JSX } from 'react'
 import { Box, Text, useInput } from 'ink'
-import { matchingCommands } from './commands.ts'
+import { STATIC_COMMANDS, matchingCommands } from './commands.ts'
+import type { SlashCommand } from './commands.ts'
 import { DEEPSEEK_BLUE } from './theme.ts'
 
 export interface InputProps {
@@ -21,9 +22,16 @@ export interface InputProps {
   onPaletteRowsChange?: (rows: number) => void
   /** Disable text capture while a modal picker owns the keyboard. */
   isActive?: boolean
+  /** Effective local + runtime command catalog. */
+  commands?: readonly SlashCommand[]
 }
 
-export function Input({ onSubmit, onPaletteRowsChange, isActive = true }: InputProps): JSX.Element {
+export function Input({
+  onSubmit,
+  onPaletteRowsChange,
+  isActive = true,
+  commands = STATIC_COMMANDS,
+}: InputProps): JSX.Element {
   // This is the only text-entry surface. Ink reserves Esc for clearing focus,
   // so tying input activity to useFocus would make Esc interruption disable
   // all subsequent typing. Keep the composer active independently of focus.
@@ -35,8 +43,8 @@ export function Input({ onSubmit, onPaletteRowsChange, isActive = true }: InputP
   const [selected, setSelected] = useState(0)
   const [paletteDismissed, setPaletteDismissed] = useState(false)
   const matches = useMemo(
-    () => paletteDismissed ? [] : matchingCommands(value),
-    [paletteDismissed, value],
+    () => paletteDismissed ? [] : matchingCommands(value, commands),
+    [commands, paletteDismissed, value],
   )
 
   useEffect(() => {
@@ -71,7 +79,7 @@ export function Input({ onSubmit, onPaletteRowsChange, isActive = true }: InputP
     if (key.tab && matches.length > 0) {
       const match = matches[selected]
       if (match !== undefined) {
-        const completed = `${match.name}${match.args === '' ? '' : ' '}`
+        const completed = `/${match.name}${match.inputHint === undefined ? '' : ' '}`
         setValue(completed)
         setCursor(completed.length)
       }
@@ -141,9 +149,9 @@ export function Input({ onSubmit, onPaletteRowsChange, isActive = true }: InputP
       {matches.map((command, index) => (
         <Box key={command.name} paddingX={1}>
           <Text color={index === selected ? DEEPSEEK_BLUE : undefined} bold={index === selected}>
-            {index === selected ? '› ' : '  '}{command.name}
+            {index === selected ? '› ' : '  '}/{command.name}
           </Text>
-          {command.args !== '' && <Text dimColor> {command.args}</Text>}
+          {command.inputHint !== undefined && <Text dimColor> {command.inputHint}</Text>}
           <Text dimColor>  {command.description}</Text>
         </Box>
       ))}

@@ -1,27 +1,66 @@
 /** Discoverable slash commands shown by the input palette. */
+export type CommandSource = 'local' | 'prompt' | 'runtime'
+
 export interface SlashCommand {
+  /** Lowercase command name without the leading slash. */
   name: string
-  args: string
+  /** Optional free-form input hint. */
+  inputHint?: string
   description: string
+  source: CommandSource
 }
 
-export const SLASH_COMMANDS: readonly SlashCommand[] = [
-  { name: '/help', args: '', description: 'show commands and keyboard help' },
-  { name: '/new', args: '[id]', description: 'start a fresh session' },
-  { name: '/resume', args: '[id]', description: 'browse or continue a saved session' },
-  { name: '/sessions', args: '', description: 'list recent sessions across projects' },
-  { name: '/clear', args: '', description: 'clear the screen, keep the session' },
-  { name: '/status', args: '', description: 'show runtime and workspace status' },
-  { name: '/session', args: '', description: 'show the current session id' },
-  { name: '/model', args: '[name]', description: 'show model or print switch instructions' },
-  { name: '/init', args: '', description: 'ask dsh to inspect and initialize the project' },
-  { name: '/review', args: '[scope]', description: 'ask dsh to review the current changes' },
-  { name: '/quit', args: '', description: 'exit dsh' },
+export interface ParsedCommandLine {
+  name: string
+  /** Exact text following the command name, including separator whitespace. */
+  rawInput: string
+}
+
+export const LOCAL_COMMANDS: readonly SlashCommand[] = [
+  { name: 'help', description: 'show commands and keyboard help', source: 'local' },
+  { name: 'new', inputHint: '[id]', description: 'start a fresh session', source: 'local' },
+  { name: 'resume', inputHint: '[id]', description: 'browse or continue a saved session', source: 'local' },
+  { name: 'sessions', description: 'list recent sessions across projects', source: 'local' },
+  { name: 'clear', description: 'clear the screen, keep the session', source: 'local' },
+  { name: 'status', description: 'show runtime and workspace status', source: 'local' },
+  { name: 'session', description: 'show the current session id', source: 'local' },
+  { name: 'model', inputHint: '[name]', description: 'show model or print switch instructions', source: 'local' },
+  { name: 'quit', description: 'exit dsh', source: 'local' },
 ]
 
+export const PROMPT_COMMANDS: readonly SlashCommand[] = [
+  { name: 'init', description: 'ask dsh to inspect and initialize the project', source: 'prompt' },
+  { name: 'review', inputHint: '[scope]', description: 'ask dsh to review the current changes', source: 'prompt' },
+]
+
+export const STATIC_COMMANDS = mergeCommands(LOCAL_COMMANDS, PROMPT_COMMANDS)
+
+/** Parse an exact slash command while preserving the handler-owned raw input. */
+export function parseCommandLine(line: string): ParsedCommandLine | undefined {
+  const match = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u.exec(line)
+  const name = match?.[1]
+  if (match === null || match === undefined || name === undefined) return undefined
+  return { name, rawInput: line.slice(match[0].length) }
+}
+
+/** Merge command sources in priority order; the first definition wins. */
+export function mergeCommands(...sources: readonly (readonly SlashCommand[])[]): readonly SlashCommand[] {
+  const commands = new Map<string, SlashCommand>()
+  for (const source of sources) {
+    for (const command of source) {
+      if (!commands.has(command.name)) commands.set(command.name, command)
+    }
+  }
+  return [...commands.values()]
+}
+
 /** Return palette entries while a single slash-command token is being typed. */
-export function matchingCommands(value: string, limit = 6): readonly SlashCommand[] {
-  if (!value.startsWith('/') || /\s/.test(value)) return []
-  const query = value.toLowerCase()
-  return SLASH_COMMANDS.filter((command) => command.name.startsWith(query)).slice(0, limit)
+export function matchingCommands(
+  value: string,
+  commands: readonly SlashCommand[] = STATIC_COMMANDS,
+  limit = 6,
+): readonly SlashCommand[] {
+  if (!value.startsWith('/') || /\s/u.test(value)) return []
+  const query = value.slice(1).toLowerCase()
+  return commands.filter((command) => command.name.startsWith(query)).slice(0, limit)
 }

@@ -12,7 +12,12 @@ import { Store } from '../src/store.ts'
 import { listSessions, loadSession, projectKey, scanZstdFrames } from '../src/sessions.ts'
 import { activityRows } from '../src/ui/activity.tsx'
 import { chatRows, wrapRows } from '../src/ui/chat.tsx'
-import { matchingCommands } from '../src/ui/commands.ts'
+import {
+  LOCAL_COMMANDS,
+  mergeCommands,
+  matchingCommands,
+  parseCommandLine,
+} from '../src/ui/commands.ts'
 import { nextGraphemeBoundary, previousGraphemeBoundary } from '../src/ui/input.tsx'
 import { relativeTime, shortSessionId } from '../src/ui/session-picker.tsx'
 import { createOrResumeRuntimeSession } from '../src/runtime-server.ts'
@@ -111,10 +116,15 @@ test('store resets session state and tracks active subagents', () => {
   assert.equal(store.getState().activeSubagents, 0)
 
   store.applyMany([{ kind: 'user-message', id: 'visible', text: 'clear me', injected: false }])
+  store.applyMany([{
+    kind: 'todos',
+    todos: [{ content: 'keep the active task', status: 'in_progress' }],
+  }])
   store.clearView()
   assert.equal(store.getState().sessionId, 'new')
   assert.equal(store.getState().messages.length, 0)
   assert.equal(store.getState().activities.length, 0)
+  assert.deepEqual(store.getState().todos, [{ content: 'keep the active task', status: 'in_progress' }])
   assert.equal(store.getState().error, null)
 
   store.applyMany([
@@ -124,10 +134,31 @@ test('store resets session state and tracks active subagents', () => {
   assert.equal(store.getState().activeSubagents, 0)
 })
 
+test('slash command catalog merges runtime entries without overriding local commands', () => {
+  const commands = mergeCommands(LOCAL_COMMANDS, [
+    { name: 'compact', description: 'compact history', source: 'runtime' },
+    { name: 'clear', description: 'runtime clear', source: 'runtime' },
+  ])
+  assert.equal(commands.find((command) => command.name === 'clear')?.source, 'local')
+  assert.equal(commands.find((command) => command.name === 'compact')?.source, 'runtime')
+})
+
 test('slash command discovery filters commands without swallowing arguments', () => {
-  assert.equal(matchingCommands('/res')[0]?.name, '/resume')
-  assert.equal(matchingCommands('/').length, 6)
-  assert.deepEqual(matchingCommands('/resume session-id'), [])
+  const commands = mergeCommands(LOCAL_COMMANDS, [
+    { name: 'compact', description: 'compact history', source: 'runtime' },
+  ])
+  assert.equal(matchingCommands('/res', commands)[0]?.name, 'resume')
+  assert.equal(matchingCommands('/', commands).length, 6)
+  assert.deepEqual(matchingCommands('/resume session-id', commands), [])
+})
+
+test('slash command parsing preserves the runtime command raw input', () => {
+  assert.deepEqual(parseCommandLine('/feedback   exact  text'), {
+    name: 'feedback',
+    rawInput: '   exact  text',
+  })
+  assert.equal(parseCommandLine('/not.valid'), undefined)
+  assert.equal(parseCommandLine('ordinary text'), undefined)
 })
 
 test('workspace session directory matches Harness persistence naming', () => {
