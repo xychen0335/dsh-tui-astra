@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { zstdCompressSync } from 'node:zlib'
 import type { HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
 import { parseArgs } from '../src/config.ts'
+import { customProviderConfig } from '../src/runtime-provider.ts'
 import { NotificationClassifier, classifySessionEvent } from '../src/harness/events.ts'
 import { Store } from '../src/store.ts'
 import { listSessions, loadSession, projectKey, scanZstdFrames } from '../src/sessions.ts'
@@ -31,6 +32,11 @@ function notification(method: string, params: Record<string, unknown>): HarnessN
   return { method, params } as HarnessNotification
 }
 
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name]
+  else process.env[name] = value
+}
+
 test('DSH_CWD supplies the default workspace', () => {
   const previous = process.env['DSH_CWD']
   process.env['DSH_CWD'] = '/tmp/dsh-workspace'
@@ -41,6 +47,100 @@ test('DSH_CWD supplies the default workspace', () => {
     if (previous === undefined) delete process.env['DSH_CWD']
     else process.env['DSH_CWD'] = previous
   }
+})
+
+test('provider configuration follows CLI over environment without exposing literal credentials', () => {
+  const previous = {
+    provider: process.env['DSH_PROVIDER'],
+    model: process.env['DSH_MODEL'],
+    baseURL: process.env['DSH_BASE_URL'],
+    apiKeyEnv: process.env['DSH_API_KEY_ENV'],
+    apiKey: process.env['DSH_API_KEY'],
+  }
+  process.env['DSH_PROVIDER'] = 'environment-route'
+  process.env['DSH_MODEL'] = 'environment-model'
+  process.env['DSH_BASE_URL'] = 'https://environment.example/v1'
+  process.env['DSH_API_KEY_ENV'] = 'ENVIRONMENT_API_KEY'
+  process.env['DSH_API_KEY'] = 'literal-secret-must-not-enter-config'
+  try {
+    const options = parseArgs([
+      '--provider', 'cli-route',
+      '--model', 'cli-model',
+      '--base-url', 'https://cli.example/v1',
+      '--api-key-env', 'CLI_API_KEY',
+      '--api', 'openai-completions',
+    ])
+    assert.equal(options.provider, 'cli-route')
+    assert.equal(options.model, 'cli-model')
+    assert.equal(options.baseURL, 'https://cli.example/v1')
+    assert.equal(options.apiKeyEnv, 'CLI_API_KEY')
+    assert.equal(options.api, 'openai-completions')
+
+    const config = customProviderConfig({
+      DSH_PROVIDER: options.provider,
+      DSH_MODEL: options.model,
+      DSH_BASE_URL: options.baseURL,
+      DSH_API_KEY_ENV: options.apiKeyEnv,
+      DSH_API: options.api,
+      DSH_API_KEY: process.env['DSH_API_KEY'],
+    })
+    assert.deepEqual(config, {
+      providers: {
+        'cli-route': {
+          apiKeyEnv: 'CLI_API_KEY',
+          api: 'openai-completions',
+          baseURL: 'https://cli.example/v1',
+          models: [{ id: 'cli-model' }],
+        },
+      },
+    })
+    assert.equal(JSON.stringify(config).includes('literal-secret-must-not-enter-config'), false)
+  } finally {
+    restoreEnv('DSH_PROVIDER', previous.provider)
+    restoreEnv('DSH_MODEL', previous.model)
+    restoreEnv('DSH_BASE_URL', previous.baseURL)
+    restoreEnv('DSH_API_KEY_ENV', previous.apiKeyEnv)
+    restoreEnv('DSH_API_KEY', previous.apiKey)
+  }
+})
+
+test('non-DeepSeek providers require an explicit model', () => {
+  const previousProvider = process.env['DSH_PROVIDER']
+  const previousModel = process.env['DSH_MODEL']
+  process.env['DSH_PROVIDER'] = 'custom-route'
+  delete process.env['DSH_MODEL']
+  try {
+    assert.throws(() => parseArgs([]), /requires --model or DSH_MODEL/)
+  } finally {
+    restoreEnv('DSH_PROVIDER', previousProvider)
+    restoreEnv('DSH_MODEL', previousModel)
+  }
+})
+
+test('changing only the provider does not inherit the DeepSeek default model', () => {
+  const previousProvider = process.env['DSH_PROVIDER']
+  const previousModel = process.env['DSH_MODEL']
+  delete process.env['DSH_PROVIDER']
+  delete process.env['DSH_MODEL']
+  try {
+    assert.throws(() => parseArgs(['--provider', 'openai']), /requires --model or DSH_MODEL/)
+    assert.equal(parseArgs([]).model, 'deepseek-v4-flash')
+  } finally {
+    restoreEnv('DSH_PROVIDER', previousProvider)
+    restoreEnv('DSH_MODEL', previousModel)
+  }
+})
+
+test('DSH_API is referenced by name and never copied into provider configuration', () => {
+  const config = customProviderConfig({
+    DSH_PROVIDER: 'private-gateway',
+    DSH_MODEL: 'private-model',
+    DSH_BASE_URL: 'https://gateway.example/v1',
+    DSH_API: 'openai-completions',
+    DSH_API_KEY: 'top-secret',
+  })
+  assert.equal(config.providers?.['private-gateway']?.apiKeyEnv, 'DSH_API_KEY')
+  assert.equal(JSON.stringify(config).includes('top-secret'), false)
 })
 
 test('sessions default to the native Harness home without a hard-coded user path', () => {

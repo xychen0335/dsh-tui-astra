@@ -5,6 +5,11 @@
 # Environment:
 #   DEEPSEEK_API_KEY    credential for the DeepSeek endpoint
 #   DEEPSEEK_BASE_URL   optional endpoint override
+#   DSH_PROVIDER        provider route (deepseek-official or a custom route)
+#   DSH_MODEL           model id
+#   DSH_BASE_URL        custom provider endpoint
+#   DSH_API_KEY_ENV     credential environment-variable name
+#   DSH_API             custom provider wire protocol
 #   DSH_CWD             agent workspace for bash and filesystem tools
 #   DSH_SESSION_ROOT    JSONL session directory (entry defaults to ~/.dsh/sessions)
 #   DSH_SYSTEM_PROMPT   optional persona override
@@ -21,6 +26,9 @@
   config:
     thinking: enabled
     reasoningEffort: max
+
+- id: runtime-provider
+  name: '../lib/runtime-provider.js'
 
 - id: subprocess
   name: '@deepseek-ai/dsh-subprocess-local'

@@ -16,6 +16,12 @@ export interface CliOptions {
   provider: string
   /** Model for the session. */
   model: string
+  /** Custom provider endpoint. */
+  baseURL?: string
+  /** Environment-variable name containing the provider credential. */
+  apiKeyEnv?: string
+  /** Wire protocol for a hand-declared provider route. */
+  api?: string
   /** Optional output-token cap per model request. */
   maxTokens?: number
   /** Session id to reuse; omitted mints a fresh one. */
@@ -60,10 +66,15 @@ export function resolveRuntimeBin(): string {
  * @returns resolved options; unknown flags throw.
  */
 export function parseArgs(argv: readonly string[]): CliOptions {
+  const provider = process.env['DSH_PROVIDER'] ?? 'deepseek-official'
+  const environmentModel = process.env['DSH_MODEL']
   const options: CliOptions = {
     workspace: resolve(process.env['DSH_CWD'] ?? process.cwd()),
-    provider: 'deepseek-official',
-    model: process.env['DSH_MODEL'] ?? 'deepseek-v4-flash',
+    provider,
+    model: environmentModel ?? '',
+    ...(process.env['DSH_BASE_URL'] === undefined ? {} : { baseURL: process.env['DSH_BASE_URL'] }),
+    ...(process.env['DSH_API_KEY_ENV'] === undefined ? {} : { apiKeyEnv: process.env['DSH_API_KEY_ENV'] }),
+    ...(process.env['DSH_API'] === undefined ? {} : { api: process.env['DSH_API'] }),
     sessionRoot: defaultSessionRoot(),
     cordis: defaultCordisPath(),
   }
@@ -87,6 +98,24 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         const value = argv[++i]
         if (value === undefined) throw new Error(`${arg} requires a value`)
         options.provider = value
+        break
+      }
+      case '--base-url': {
+        const value = argv[++i]
+        if (value === undefined) throw new Error(`${arg} requires a value`)
+        options.baseURL = value
+        break
+      }
+      case '--api-key-env': {
+        const value = argv[++i]
+        if (value === undefined) throw new Error(`${arg} requires a value`)
+        options.apiKeyEnv = value
+        break
+      }
+      case '--api': {
+        const value = argv[++i]
+        if (value === undefined) throw new Error(`${arg} requires a value`)
+        options.api = value
         break
       }
       case '--session': {
@@ -123,6 +152,10 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     }
   }
 
+  if (options.model === '') {
+    if (options.provider === 'deepseek-official') options.model = 'deepseek-v4-flash'
+    else throw new Error(`provider "${options.provider}" requires --model or DSH_MODEL`)
+  }
   return options
 }
 
@@ -136,8 +169,11 @@ Usage: dsh [options]
 
 Options:
   --cwd <dir>           agent workspace (bash/fs root) [default: current dir]
-  --model <name>        model id [default: $DSH_MODEL or deepseek-v4-flash]
-  --provider <name>     provider route [default: deepseek-official]
+  --model <name>        model id [default: $DSH_MODEL; DeepSeek uses deepseek-v4-flash]
+  --provider <name>     provider route [default: $DSH_PROVIDER or deepseek-official]
+  --base-url <url>      custom provider endpoint [default: $DSH_BASE_URL]
+  --api-key-env <name>  credential environment-variable name [default: $DSH_API_KEY_ENV]
+  --api <protocol>      custom route protocol [default: $DSH_API]
   --session <id>        reuse a session id
   --max-tokens <n>      output-token cap per model request
   --cordis <path>       runtime cordis.yml [default: bundled tui.cordis.yml]
@@ -148,7 +184,12 @@ Environment:
   DEEPSEEK_API_KEY      credential (required unless a provider default exists)
   DEEPSEEK_BASE_URL     optional endpoint override
   DSH_CWD               workspace when --cwd is absent
+  DSH_PROVIDER          provider route when --provider is absent
   DSH_MODEL             model when --model is absent
+  DSH_BASE_URL          custom provider endpoint
+  DSH_API_KEY           custom provider credential (read from the environment only)
+  DSH_API_KEY_ENV       credential environment-variable name
+  DSH_API               custom provider protocol (for example openai-completions)
   DSH_AGENTS_HOME       shared agent config root [default: ~/.agents]
   DSH_HOME              Harness home [default: ~/.dsh]
   DSH_SESSION_ROOT      session JSONL directory [default: $DSH_HOME/sessions]

@@ -57,6 +57,11 @@ async function main(): Promise<void> {
       ...process.env,
       DSH_CWD: options.workspace,
       DSH_SESSION_ROOT: options.sessionRoot,
+      DSH_PROVIDER: options.provider,
+      DSH_MODEL: options.model,
+      ...(options.baseURL === undefined ? {} : { DSH_BASE_URL: options.baseURL }),
+      ...(options.apiKeyEnv === undefined ? {} : { DSH_API_KEY_ENV: options.apiKeyEnv }),
+      ...(options.api === undefined ? {} : { DSH_API: options.api }),
     },
   }, (notification) => {
     store.applyMany(notificationClassifier.classify(notification, bridge.getSessionId()))

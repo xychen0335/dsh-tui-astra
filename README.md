@@ -1,6 +1,6 @@
 # dsh-tui-astra
 
-`dsh-tui-astra` 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的交互式终端客户端。安装后在任意目录执行 `dsh`，即可启动一个面向编码任务的 DeepSeek TUI。
+`dsh-tui-astra` 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的交互式终端客户端。安装后在任意目录执行 `dsh`，即可启动一个面向编码任务的 Harness TUI。默认使用 DeepSeek，也支持 OpenAI、Anthropic 和自定义兼容端点。
 
 它通过 stdio JSON-RPC 启动并连接 Harness 运行时，实时展示模型回复、推理、工具调用、任务阶段和子 agent 状态。会话与原生 Harness 共用持久化目录，可以直接浏览和恢复此前的对话。
 
@@ -39,7 +39,7 @@
 
 - Node.js 22.19 或更高版本
 - pnpm
-- `DEEPSEEK_API_KEY`
+- 至少一个已配置 provider 的 API Key；默认 DeepSeek 使用 `DEEPSEEK_API_KEY`
 
 ## 安装
 
@@ -94,8 +94,11 @@ pnpm dev -- --cwd /path/to/project
 | 参数 | 说明 |
 |---|---|
 | `--cwd <dir>` | agent 工作目录，也是 bash 和文件系统工具的根目录 |
-| `--model <name>` | 模型 ID，默认读取 `DSH_MODEL` 或使用 `deepseek-v4-flash` |
-| `--provider <name>` | provider 路由，默认 `deepseek-official` |
+| `--model <name>` | 模型 ID，默认读取 `DSH_MODEL`；DeepSeek 默认使用 `deepseek-v4-flash` |
+| `--provider <name>` | provider 路由，默认读取 `DSH_PROVIDER` 或使用 `deepseek-official` |
+| `--base-url <url>` | 自定义 provider endpoint |
+| `--api-key-env <name>` | 保存 API Key 的环境变量名称，不接受明文 key |
+| `--api <protocol>` | 自定义 provider 协议，例如 `openai-completions` |
 | `--session <id>` | 使用指定会话 ID |
 | `--max-tokens <n>` | 单次模型请求的最大输出 token 数 |
 | `--cordis <path>` | 使用自定义 Cordis 运行时配置 |
@@ -109,7 +112,12 @@ pnpm dev -- --cwd /path/to/project
 | `DEEPSEEK_API_KEY` | DeepSeek API 凭证 |
 | `DEEPSEEK_BASE_URL` | 自定义 API 地址 |
 | `DSH_CWD` | 未传入 `--cwd` 时使用的工作目录 |
+| `DSH_PROVIDER` | 默认 provider 路由 |
 | `DSH_MODEL` | 默认模型 |
+| `DSH_BASE_URL` | 非 DeepSeek provider 的 endpoint |
+| `DSH_API_KEY` | 自定义 provider API Key；只从进程环境读取 |
+| `DSH_API_KEY_ENV` | API Key 所在环境变量的名称 |
+| `DSH_API` | 自定义 provider 协议 |
 | `DSH_AGENTS_HOME` | 共享 agent 配置目录，默认 `~/.agents` |
 | `DSH_HOME` | Harness 数据目录，默认 `~/.dsh` |
 | `DSH_SESSION_ROOT` | 显式覆盖会话目录，默认 `$DSH_HOME/sessions` |
@@ -123,6 +131,50 @@ pnpm dev -- --cwd /path/to/project
     <session-id>/
       session.jsonl.zstd
 ```
+
+### 自定义模型提供方
+
+默认 runtime 同时包含 DeepSeek 官方 adapter 和通用多 provider adapter。使用
+DeepSeek 时保持原有方式：
+
+```sh
+export DEEPSEEK_API_KEY=...
+dsh --provider deepseek-official --model deepseek-v4-flash
+```
+
+使用通用 adapter 已内置的 provider catalog，例如 OpenAI：
+
+```sh
+export OPENAI_API_KEY=...
+dsh --provider openai --model gpt-5
+```
+
+使用任意 OpenAI-compatible endpoint：
+
+```sh
+export DSH_API_KEY=...
+dsh \
+  --provider my-gateway \
+  --model my-model \
+  --base-url https://gateway.example/v1 \
+  --api openai-completions
+```
+
+也可以把凭证放在其他环境变量中：
+
+```sh
+export COMPANY_LLM_TOKEN=...
+dsh \
+  --provider company \
+  --model company-large \
+  --base-url https://llm.company.example/v1 \
+  --api openai-completions \
+  --api-key-env COMPANY_LLM_TOKEN
+```
+
+CLI 和 Cordis 配置只传递环境变量名称，不复制 API Key 值。为避免凭证进入 shell
+history，不提供 `--api-key <value>` 参数。自定义 provider 必须显式指定模型；
+手工声明的新 route 通常还需要 `--base-url` 和 `--api`。
 
 ## 快捷键
 
@@ -258,7 +310,7 @@ pnpm build
 
 ## 当前限制
 
-- `/model` 只能查看当前模型；切换模型需要重新启动 `dsh`。
+- `/model` 只能查看当前 provider/model；切换需要重新启动 `dsh`。
 - `/plan` 支持直接进入和通过 `/plan off` 退出；模型调用
   `exit_plan_mode` 时所需的交互式计划审批 UI 尚未接入。
 - 自定义插件目前通过完整 `--cordis` 配置加载，还没有 overlay 和安装管理。
