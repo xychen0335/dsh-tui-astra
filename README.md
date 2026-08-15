@@ -44,7 +44,7 @@
 ## 安装
 
 ```sh
-npm install --global dsh-tui-astra@0.1.0
+npm install --global dsh-tui-astra
 ```
 
 安装完成后，可以在任意工作目录启动：
@@ -60,7 +60,7 @@ dsh
 dsh --cwd /path/to/project
 ```
 
-升级或回退时显式指定目标版本，npm 会统一替换现有全局版本：
+升级时重新执行安装命令即可获取最新版本；回退到旧版本时显式指定版本号：
 
 ```sh
 npm install --global dsh-tui-astra@<version>
