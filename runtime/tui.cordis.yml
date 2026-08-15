@@ -6,12 +6,12 @@
 #   DEEPSEEK_API_KEY    credential for the DeepSeek endpoint
 #   DEEPSEEK_BASE_URL   optional endpoint override
 #   DSH_CWD             agent workspace for bash and filesystem tools
-#   DSH_SESSION_ROOT    JSONL session directory (default ./.sessions)
+#   DSH_SESSION_ROOT    JSONL session directory (entry defaults to ~/.dsh/sessions)
 #   DSH_SYSTEM_PROMPT   optional persona override
 #   DSH_MODEL           optional default model
 
 - id: sdk-jsonrpc-server
-  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
+  name: '../lib/runtime-server.js'
 
 - id: llm-deepseek
   name: '@deepseek-ai/dsh-llm-deepseek'
@@ -44,7 +44,7 @@
 - id: sessions
   name: '@deepseek-ai/dsh-session-persistence-jsonl'
   config:
-    root: !!js process.env.DSH_SESSION_ROOT ?? './.sessions'
+    root: !!js process.env.DSH_SESSION_ROOT ?? ((process.env.DSH_HOME ?? ((process.env.HOME ?? process.cwd()) + '/.dsh')) + '/sessions')
 
 - id: session-checkpoints
   name: '@deepseek-ai/dsh-session-checkpoint-policy'
