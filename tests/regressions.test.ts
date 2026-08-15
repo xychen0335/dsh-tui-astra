@@ -4,28 +4,29 @@ import { homedir } from 'node:os'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { PassThrough } from 'node:stream'
 import { zstdCompressSync } from 'node:zlib'
-import { createElement, useState } from 'react'
-import { render } from 'ink'
+import { visibleWidth } from '@earendil-works/pi-tui'
 import type { HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
 import { parseArgs } from '../src/config.ts'
 import { customProviderConfig } from '../src/runtime-provider.ts'
 import { NotificationClassifier, classifySessionEvent } from '../src/harness/events.ts'
 import { Store } from '../src/store.ts'
 import { listSessions, loadSession, projectKey, scanZstdFrames } from '../src/sessions.ts'
-import { activityRows } from '../src/ui/activity.tsx'
-import { Chat, chatRows, wrapRows } from '../src/ui/chat.tsx'
-import { Input } from '../src/ui/input.tsx'
+import { activityRows } from '../src/ui/activity.ts'
+import { chatRows, wrapRows } from '../src/ui/chat.ts'
 import {
   LOCAL_COMMANDS,
   mergeCommands,
   matchingCommands,
   parseCommandLine,
 } from '../src/ui/commands.ts'
-import { nextGraphemeBoundary, previousGraphemeBoundary } from '../src/ui/input.tsx'
-import { relativeTime, shortSessionId } from '../src/ui/session-picker.tsx'
+import { nextGraphemeBoundary, previousGraphemeBoundary } from '../src/ui/input.ts'
+import { relativeTime, shortSessionId } from '../src/ui/session-picker.ts'
+import { SessionPickerComponent } from '../src/ui/session-picker.ts'
 import { isMouseReport } from '../src/ui/terminal-input.ts'
+import { AstraApp } from '../src/ui/app.ts'
+import type { AstraBridge } from '../src/ui/app.ts'
+import { FakeTerminal } from './fake-terminal.ts'
 import {
   configureRuntimeProvider,
   createOrResumeRuntimeSession,
@@ -39,7 +40,7 @@ import {
   selectRuntimeModel,
   testRuntimeProvider,
 } from '../src/runtime-server.ts'
-import { matchesModelQuery, providerForm } from '../src/ui/model-picker.tsx'
+import { matchesModelQuery, ModelPickerComponent, providerForm } from '../src/ui/model-picker.ts'
 
 function notification(method: string, params: Record<string, unknown>): HarnessNotification {
   return { method, params } as HarnessNotification
@@ -878,270 +879,294 @@ test('activity rows stay terse and reserve red for errors', () => {
   ])
 })
 
-test('input palette height reports once across parent rerenders', async () => {
-  const stdin = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    setRawMode: (enabled: boolean) => void
-    ref: () => void
-    unref: () => void
+function idleBridge(overrides: Partial<AstraBridge> = {}): AstraBridge {
+  return {
+    getSessionId: () => 'session-test',
+    newSession: (id) => id ?? 'session-new',
+    send: async () => 'message-test',
+    executeCommand: async () => ({ matched: true }),
+    listCommands: async () => [],
+    listSkills: async () => [],
+    interrupt: async () => {},
+    listModels: async () => ({
+      current: { provider: 'provider', model: 'model' },
+      groups: [],
+      failures: [],
+    }),
+    listProviders: async () => [],
+    selectModel: async (provider, model) => ({ provider, model }),
+    saveProvider: async () => ({}),
+    deleteProvider: async () => {},
+    testProvider: async () => [],
+    ...overrides,
   }
-  stdin.isTTY = true
-  stdin.setRawMode = () => {}
-  stdin.ref = () => {}
-  stdin.unref = () => {}
-  const stdout = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    columns: number
-    rows: number
-  }
-  stdout.isTTY = false
-  stdout.columns = 80
-  stdout.rows = 24
-  const stderr = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    columns: number
-    rows: number
-  }
-  stderr.isTTY = false
-  stderr.columns = 80
-  stderr.rows = 24
+}
 
-  const reports: number[] = []
-  let rerender: (() => void) | undefined
-  function Probe(): ReturnType<typeof createElement> {
-    const [, setTick] = useState(0)
-    rerender = () => { setTick((current) => current + 1) }
-    return createElement(Input, {
-      onSubmit: () => {},
-      onPaletteRowsChange: (rows) => {
-        reports.push(rows)
-        setTick((current) => current + 1)
-      },
-      commands: [],
-    })
-  }
+async function settleTui(): Promise<void> {
+  await new Promise<void>((resolve) => process.nextTick(resolve))
+  await new Promise<void>((resolve) => setTimeout(resolve, 25))
+}
 
-  const instance = render(createElement(Probe), {
-    stdin,
-    stdout,
-    stderr,
-    exitOnCtrlC: false,
-  })
-  try {
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    rerender?.()
-    rerender?.()
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    assert.deepEqual(reports, [0])
-  } finally {
-    instance.unmount()
-  }
-})
-
-test('Chat leaves terminal mouse tracking to native selection', async () => {
-  const stdin = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    setRawMode: (enabled: boolean) => void
-    ref: () => void
-    unref: () => void
-  }
-  stdin.isTTY = true
-  stdin.setRawMode = () => {}
-  stdin.ref = () => {}
-  stdin.unref = () => {}
-  const stdout = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    columns: number
-    rows: number
-  }
-  stdout.isTTY = true
-  stdout.columns = 80
-  stdout.rows = 24
-  const stderr = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    columns: number
-    rows: number
-  }
-  stderr.isTTY = false
-  stderr.columns = 80
-  stderr.rows = 24
-
-  let output = ''
-  stdout.on('data', (chunk: Buffer | string) => {
-    output += chunk.toString()
-  })
+test('pi-tui main screen has no mouse capture or alternate-screen sequences', async () => {
+  const terminal = new FakeTerminal()
   const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
-  const instance = render(createElement(Chat, { store, height: 8, width: 80 }), {
-    stdin,
-    stdout,
-    stderr,
-    exitOnCtrlC: false,
+  const app = new AstraApp({
+    store,
+    bridge: idleBridge(),
+    quit: () => {},
+    sessionRoot: '/tmp/no-sessions',
+    terminal,
   })
-  try {
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    assert.equal(output.includes('\u001b[?1000h'), false)
-    assert.equal(output.includes('\u001b[?1006h'), false)
-    assert.equal(stdin.listenerCount('data'), 0)
-
-    const outputBeforeUnmount = output
-    instance.unmount()
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    assert.equal(output.slice(outputBeforeUnmount.length).includes('\u001b[?1000l'), false)
-    assert.equal(output.slice(outputBeforeUnmount.length).includes('\u001b[?1006l'), false)
-    assert.equal(stdin.listenerCount('data'), 0)
-  } finally {
-    instance.unmount()
-  }
+  app.start()
+  await settleTui()
+  assert.equal(terminal.getOutput().includes('\u001b[?1000h'), false)
+  assert.equal(terminal.getOutput().includes('\u001b[?1006h'), false)
+  assert.equal(terminal.getOutput().includes('\u001b[?1049h'), false)
+  app.stop()
 })
 
-test('Chat commits completed messages once while streaming stays dynamic', async () => {
-  const stdin = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    setRawMode: (enabled: boolean) => void
-    ref: () => void
-    unref: () => void
-  }
-  stdin.isTTY = false
-  stdin.setRawMode = () => {}
-  stdin.ref = () => {}
-  stdin.unref = () => {}
-  const stdout = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    columns: number
-    rows: number
-  }
-  stdout.isTTY = false
-  stdout.columns = 80
-  stdout.rows = 24
-  const stderr = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    columns: number
-    rows: number
-  }
-  stderr.isTTY = false
-  stderr.columns = 80
-  stderr.rows = 24
-
-  const chunks: string[] = []
-  stdout.on('data', (chunk: Buffer | string) => { chunks.push(chunk.toString()) })
+test('pi-tui document keeps streaming in the dynamic tail and promotes completion', async () => {
+  const terminal = new FakeTerminal(60, 20)
   const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
-  const instance = render(createElement(Chat, { store, height: 8, width: 80 }), {
-    stdin,
-    stdout,
-    stderr,
-    exitOnCtrlC: false,
+  const app = new AstraApp({
+    store,
+    bridge: idleBridge(),
+    quit: () => {},
+    sessionRoot: '/tmp/no-sessions',
+    terminal,
   })
-  const waitForOutput = async (): Promise<void> => {
-    await new Promise((resolve) => setTimeout(resolve, 25))
-  }
+  app.start()
+  await settleTui()
+  terminal.clearOutput()
 
-  try {
-    await waitForOutput()
-    const bannerChunks = chunks.length
-    store.applyMany([{ kind: 'user-message', id: 'user-1', text: 'prompt', injected: false }])
-    await waitForOutput()
-    assert.equal(chunks.length, bannerChunks + 1)
-    assert.equal(chunks.at(-1)?.includes('prompt'), true)
+  store.applyMany([{ kind: 'user-message', id: 'u1', text: 'prompt', injected: false }])
+  store.applyMany([{ kind: 'assistant-text', text: 'partial' }])
+  await settleTui()
+  assert.match(terminal.getOutput(), /prompt/)
+  assert.match(terminal.getOutput(), /partial/)
 
-    store.applyMany([{ kind: 'assistant-text', text: 'partial' }])
-    await waitForOutput()
-    // With CI=true Ink writes newly committed Static output to stdout but
-    // keeps ordinary dynamic frames in its last-output slot.
-    const beforeDelta = chunks.length
-    assert.equal(store.getState().messages.at(-1)?.text, 'partial')
-    assert.equal(chunks.length, beforeDelta)
+  terminal.clearOutput()
+  store.applyMany([{ kind: 'assistant-text', text: ' answer' }])
+  await settleTui()
+  assert.match(terminal.getOutput(), /partial answer/)
 
-    store.applyMany([{ kind: 'assistant-text', text: ' answer' }])
-    await waitForOutput()
-    assert.equal(chunks.length, beforeDelta)
-    assert.equal(store.getState().messages.at(-1)?.text, 'partial answer')
+  terminal.clearOutput()
+  store.applyMany([{ kind: 'assistant-done' }])
+  await settleTui()
+  assert.match(terminal.getOutput(), /partial answer/)
+  assert.equal(store.getState().messages.at(-1)?.streaming, false)
 
-    store.applyMany([{ kind: 'assistant-done' }])
-    await waitForOutput()
-    assert.equal(chunks.length, beforeDelta + 1)
-    assert.equal(store.getState().messages.at(-1)?.streaming, false)
-    assert.equal(store.getState().messages.at(-1)?.text, 'partial answer')
-    assert.equal(chunks.filter((chunk) => chunk.includes('partial answer')).length, 1)
-
-    const afterCompletion = chunks.length
-    store.applyMany([{ kind: 'note', text: 'dynamic activity' }])
-    await waitForOutput()
-    assert.equal(chunks.length, afterCompletion)
-    assert.equal(store.getState().messages.at(-1)?.streaming, false)
-  } finally {
-    instance.unmount()
-  }
+  terminal.clearOutput()
+  store.applyMany([{ kind: 'note', text: 'activity only' }])
+  await settleTui()
+  assert.match(terminal.getOutput(), /activity only/)
+  assert.doesNotMatch(terminal.getOutput(), /streaming, false\)/)
+  app.stop()
 })
 
-test('Chat starts a fresh Static batch after reset, restore, and clear', async () => {
-  const stdin = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    setRawMode: (enabled: boolean) => void
-    ref: () => void
-    unref: () => void
-  }
-  stdin.isTTY = false
-  stdin.setRawMode = () => {}
-  stdin.ref = () => {}
-  stdin.unref = () => {}
-  const stdout = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    columns: number
-    rows: number
-  }
-  stdout.isTTY = false
-  stdout.columns = 80
-  stdout.rows = 24
-  const stderr = new PassThrough() as PassThrough & {
-    isTTY: boolean
-    columns: number
-    rows: number
-  }
-  stderr.isTTY = false
-  stderr.columns = 80
-  stderr.rows = 24
-
-  const output: string[] = []
-  stdout.on('data', (chunk: Buffer | string) => { output.push(chunk.toString()) })
+test('pi-tui resize and clear rebuild the live document without losing routing', async () => {
+  const terminal = new FakeTerminal(80, 24)
+  let submitted = ''
   const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
-  const instance = render(createElement(Chat, { store, height: 8, width: 80 }), {
-    stdin,
-    stdout,
-    stderr,
-    exitOnCtrlC: false,
+  const app = new AstraApp({
+    store,
+    bridge: idleBridge({ send: async (text) => { submitted = text; return 'message-test' } }),
+    quit: () => {},
+    sessionRoot: '/tmp/no-sessions',
+    terminal,
   })
-  const waitForOutput = async (): Promise<void> => {
-    await new Promise((resolve) => setTimeout(resolve, 25))
+  app.start()
+  await settleTui()
+  terminal.sendInput('hello')
+  terminal.sendInput('\r')
+  await settleTui()
+  assert.equal(submitted, 'hello')
+  terminal.resize(40, 12)
+  await settleTui()
+  store.clearView()
+  await settleTui()
+  store.applyMany([{ kind: 'user-message', id: 'after', text: 'after clear', injected: false }])
+  await settleTui()
+  assert.match(terminal.getOutput(), /after clear/)
+  app.stop()
+})
+
+test('global Ctrl+C is consumed before it reaches the focused editor', async () => {
+  let quitCount = 0
+  const terminal = new FakeTerminal()
+  const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
+  const app = new AstraApp({
+    store,
+    bridge: idleBridge(),
+    quit: () => { quitCount += 1 },
+    sessionRoot: '/tmp/no-sessions',
+    terminal,
+  })
+  app.start()
+  await settleTui()
+
+  terminal.sendInput('draft')
+  await settleTui()
+  assert.equal(app.getEditorText(), 'draft')
+
+  terminal.sendInput('\u0003')
+  await settleTui()
+  assert.equal(quitCount, 1)
+  assert.equal(app.getEditorText(), 'draft')
+  app.stop()
+})
+
+test('running Esc is consumed, preserves editor text, and interrupts once', async () => {
+  let interruptCount = 0
+  const terminal = new FakeTerminal()
+  const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
+  const app = new AstraApp({
+    store,
+    bridge: idleBridge({
+      interrupt: async () => { interruptCount += 1 },
+    }),
+    quit: () => {},
+    sessionRoot: '/tmp/no-sessions',
+    terminal,
+  })
+  app.start()
+  await settleTui()
+
+  terminal.sendInput('draft')
+  await settleTui()
+  store.applyMany([{ kind: 'phase', status: 'running' }])
+  await settleTui()
+
+  terminal.sendInput('\u001b')
+  terminal.sendInput('\u001b')
+  await settleTui()
+  assert.equal(interruptCount, 1)
+  assert.equal(app.getEditorText(), 'draft')
+  app.stop()
+})
+
+test('completed long output never contaminates the final editor/footer tail', async () => {
+  const terminal = new FakeTerminal(60, 24)
+  const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
+  const app = new AstraApp({
+    store,
+    bridge: idleBridge(),
+    quit: () => {},
+    sessionRoot: '/tmp/no-sessions',
+    terminal,
+  })
+  app.start()
+  await settleTui()
+
+  const sentinel = 'BODY_SENTINEL'
+  const longText = Array.from({ length: 32 }, (_, index) => `${sentinel} body row ${index}`).join('\n')
+  store.applyMany([
+    { kind: 'phase', status: 'idle' },
+    { kind: 'user-message', id: 'long-user', text: 'long prompt', injected: false },
+    { kind: 'assistant-text', text: longText },
+  ])
+  await settleTui()
+  store.applyMany([{ kind: 'assistant-done' }])
+  store.applyMany([{ kind: 'note', text: 'activity after completion' }])
+  await settleTui()
+
+  const snapshot = app.renderSnapshot()
+  assert.equal(snapshot.some((line) => line.includes(sentinel)), true)
+  const plain = snapshot.map((line) => stripTerminalSequences(line))
+  const footerIndex = plain.findLastIndex((line) => line.includes('/ commands · provider/model'))
+  assert.notEqual(footerIndex, -1)
+  const activityIndex = plain.findLastIndex((line) => line.includes('activity after completion'))
+  assert.notEqual(activityIndex, -1)
+  assert.ok(activityIndex < footerIndex)
+  // Only inspect the rows after the latest activity row. These are the
+  // dynamic editor border/input/footer rows; body lines remain above the
+  // activity row in the committed document.
+  const finalTail = plain.slice(activityIndex + 1, footerIndex + 1)
+  assert.equal(finalTail.some((line) => line.includes(sentinel)), false)
+  app.stop()
+})
+
+test('81-column mixed CJK activity detail respects terminal cell width', async () => {
+  const terminal = new FakeTerminal(81, 24)
+  const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
+  const app = new AstraApp({
+    store,
+    bridge: idleBridge(),
+    quit: () => {},
+    sessionRoot: '/tmp/no-sessions',
+    terminal,
+  })
+  app.start()
+  await settleTui()
+
+  store.applyMany([
+    { kind: 'user-message', id: 'mixed-user', text: '混合宽度正文', injected: false },
+    { kind: 'assistant-text', text: 'assistant 完成内容' },
+    { kind: 'assistant-done' },
+    {
+      kind: 'tool-result',
+      callId: 'call-mixed',
+      ok: false,
+      summary: '中文 detail with English words and CJK 字符'.repeat(4),
+    },
+  ])
+  await settleTui()
+
+  const lines = app.renderSnapshot()
+  assert.ok(lines.length > 0)
+  for (const line of lines) {
+    assert.ok(
+      visibleWidth(line) <= terminal.columns,
+      `rendered line width ${visibleWidth(line)} exceeds ${terminal.columns}: ${JSON.stringify(line)}`,
+    )
+  }
+  app.stop()
+})
+
+test('session and model overlays never widen past narrow renderer width', () => {
+  const sessionPicker = new SessionPickerComponent({ onSelect: () => {}, onCancel: () => {} })
+  sessionPicker.setSessions([{
+    id: 'session-cjk',
+    updatedAt: Date.now(),
+    workspace: '/项目/中文目录',
+    title: '非常长的中文会话标题 with English',
+  }])
+  for (const line of sessionPicker.render(3)) {
+    assert.ok(visibleWidth(line) <= 3, `session overlay line widened: ${JSON.stringify(line)}`)
   }
 
-  try {
-    await waitForOutput()
-    store.applyMany([{ kind: 'user-message', id: 'old', text: 'old batch', injected: false }])
-    await waitForOutput()
-    store.resetSession('new')
-    await waitForOutput()
-    store.applyMany([{ kind: 'user-message', id: 'new', text: 'new batch', injected: false }])
-    await waitForOutput()
-    store.restoreSession('saved', [
-      { kind: 'user-message', id: 'restored', text: 'restored prompt', injected: false },
-    ])
-    await waitForOutput()
-    store.applyMany([{ kind: 'assistant-text', text: 'future answer' }])
-    await waitForOutput()
-    store.applyMany([{ kind: 'assistant-done' }])
-    await waitForOutput()
-    store.clearView()
-    await waitForOutput()
-    store.applyMany([{ kind: 'user-message', id: 'after-clear', text: 'after clear', injected: false }])
-    await waitForOutput()
-
-    const text = output.join('')
-    assert.equal(text.includes('new batch'), true)
-    assert.equal(text.includes('restored prompt'), true)
-    assert.equal(text.includes('future answer'), true)
-    assert.equal(text.includes('after clear'), true)
-    assert.equal(store.getState().transcriptGeneration, 3)
-  } finally {
-    instance.unmount()
+  const modelPicker = new ModelPickerComponent(
+    'providers',
+    [],
+    [{
+      id: 'provider-cjk',
+      name: '提供方 English',
+      active: true,
+      configured: true,
+      builtIn: false,
+      credentialConfigured: true,
+      credentialWritable: true,
+      baseURL: 'https://example.invalid/很长的路径',
+      api: 'openai-completions',
+      model: '模型',
+    }],
+    { provider: 'provider-cjk', model: '模型' },
+    {
+      onSelect: () => {},
+      onSaveProvider: () => {},
+      onTestProvider: () => {},
+      onDeleteProvider: () => {},
+      onCancel: () => {},
+    },
+  )
+  for (const line of modelPicker.render(3)) {
+    assert.ok(visibleWidth(line) <= 3, `model overlay line widened: ${JSON.stringify(line)}`)
   }
 })
+
+function stripTerminalSequences(value: string): string {
+  return value
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/gu, '')
+    .replace(/\u001b_[^\u0007]*\u0007/gu, '')
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, '')
+}
