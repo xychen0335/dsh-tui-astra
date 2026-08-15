@@ -110,6 +110,7 @@ pnpm dev -- --cwd /path/to/project
 | `DEEPSEEK_BASE_URL` | 自定义 API 地址 |
 | `DSH_CWD` | 未传入 `--cwd` 时使用的工作目录 |
 | `DSH_MODEL` | 默认模型 |
+| `DSH_AGENTS_HOME` | 共享 agent 配置目录，默认 `~/.agents` |
 | `DSH_HOME` | Harness 数据目录，默认 `~/.dsh` |
 | `DSH_SESSION_ROOT` | 显式覆盖会话目录，默认 `$DSH_HOME/sessions` |
 | `DSH_SYSTEM_PROMPT` | 覆盖运行时 system prompt |
@@ -161,6 +162,38 @@ pnpm dev -- --cwd /path/to/project
 `/compact`、`/goal` 和 `/plan` 不是写死在 TUI 中的提示词，而是从当前
 Harness runtime 动态发现并直接执行的插件命令。自定义 runtime 注册的其他
 command 也会自动进入 `/` 命令面板。
+
+### Skills
+
+TUI 使用 Harness 原生 skill registry，自动发现以下目录中的技能：
+
+```text
+<project>/.dsh/skills/
+<project>/.agents/skills/
+~/.dsh/skills/
+~/.agents/skills/
+```
+
+技能可以使用 `<name>/SKILL.md` 或 `<name>.md` 形式。输入 `/` 和技能名前缀
+即可筛选并补全；提交 `/skill-name [任务说明]` 后，原始文本作为用户消息进入
+session，Harness 在 pre-step 边界注入技能内容。命令与技能重名时，direct
+command 优先，避免将直接操作误发给模型。
+
+示例：
+
+```markdown
+---
+name: code-review
+description: Review code changes for correctness and regressions
+user-invocable: true
+---
+
+Review the requested changes. Report findings by severity.
+```
+
+设置 `user-invocable: false` 的技能不会出现在 TUI 菜单；设置
+`disable-model-invocation: true` 可保留用户显式调用，同时从模型自己的 skill
+目录中隐藏。
 
 ## 自定义插件
 
@@ -219,9 +252,9 @@ pnpm test
 pnpm build
 ```
 
-运行时组合包含 DeepSeek LLM、bash、本地文件系统、todo、子 agent、持久化
-goal、plan mode、会话持久化和上下文压缩。需要调整工具或策略时，可以复制
-`runtime/tui.cordis.yml`，修改后通过 `--cordis` 加载。
+运行时组合包含 DeepSeek LLM、bash、本地文件系统、todo、skills、子 agent、
+持久化 goal、plan mode、会话持久化和上下文压缩。需要调整工具或策略时，
+可以复制 `runtime/tui.cordis.yml`，修改后通过 `--cordis` 加载。
 
 ## 当前限制
 

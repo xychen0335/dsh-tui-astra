@@ -149,6 +149,7 @@ Environment:
   DEEPSEEK_BASE_URL     optional endpoint override
   DSH_CWD               workspace when --cwd is absent
   DSH_MODEL             model when --model is absent
+  DSH_AGENTS_HOME       shared agent config root [default: ~/.agents]
   DSH_HOME              Harness home [default: ~/.dsh]
   DSH_SESSION_ROOT      session JSONL directory [default: $DSH_HOME/sessions]
 

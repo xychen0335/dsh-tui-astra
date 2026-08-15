@@ -15,6 +15,8 @@ import {
 } from '@deepseek-ai/dsh-sdk-jsonrpc-server'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandDescriptor, CommandExecution } from '@deepseek-ai/dsh-commands'
+import { isUserInvocable } from '@deepseek-ai/dsh-skill'
+import type { SkillSummary } from '@deepseek-ai/dsh-skill'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type {
   CommandsExecuteResult,
@@ -24,7 +26,7 @@ import type {
 export { Config }
 
 export const name = 'sdk-jsonrpc-server-resume'
-export const inject = ['agents', 'commands', 'sessionPersistence']
+export const inject = ['agents', 'commands', 'sessionPersistence', 'skills']
 
 type UpstreamContext = Parameters<typeof applyUpstream>[0]
 type UpstreamConfig = Parameters<typeof applyUpstream>[1]
@@ -52,6 +54,9 @@ interface ResumeRuntimeContext {
   commands: {
     list(agent: Agent): readonly CommandDescriptor[]
     execute(agent: Agent, line: string, signal: AbortSignal): Promise<CommandExecution | undefined>
+  }
+  skills: {
+    list(options: { cwd?: string; scope?: Agent; signal?: AbortSignal }): Promise<SkillSummary[]>
   }
 }
 
@@ -92,6 +97,9 @@ prototype.handleRequest = async function (
       requiredString(params, 'line'),
     )
   }
+  if (method === 'skills/list') {
+    return listRuntimeSkills(this, requiredString(params, 'sessionId'))
+  }
   return upstreamHandleRequest.call(this, method, params)
 }
 
@@ -117,6 +125,33 @@ export async function executeRuntimeCommand(
     matched: true,
     commandId: String(execution.commandId),
     result: execution.result,
+  }
+}
+
+/** List user-invocable skills visible to the exact session agent and workspace. */
+export async function listRuntimeSkills(
+  server: Pick<ResumeAwareServer, 'ctx' | 'sessions' | 'getOrCreateSession'>,
+  sessionId: string,
+): Promise<{
+  skills: readonly {
+    name: string
+    description: string
+    modelInvocable: boolean
+    source: string
+  }[]
+}> {
+  const agent = await runtimeAgent(server, sessionId)
+  const skills = await server.ctx.skills.list({
+    cwd: agent.session.header.cwd,
+    scope: agent,
+  })
+  return {
+    skills: skills.filter(isUserInvocable).map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      modelInvocable: skill.invocation.modelInvocable,
+      source: skill.source,
+    })),
   }
 }
 

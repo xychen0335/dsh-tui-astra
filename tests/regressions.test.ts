@@ -24,6 +24,7 @@ import {
   createOrResumeRuntimeSession,
   executeRuntimeCommand,
   listRuntimeCommands,
+  listRuntimeSkills,
 } from '../src/runtime-server.ts'
 
 function notification(method: string, params: Record<string, unknown>): HarnessNotification {
@@ -134,6 +135,20 @@ test('command lifecycle events stay in the activity plane', () => {
     { kind: 'command', text: 'compact → No compactable history yet.', error: false },
   ])
   assert.equal(store.getState().messages.length, 0)
+})
+
+test('user-invoked skill context is presented as a terse activity', () => {
+  assert.deepEqual(classifySessionEvent({
+    type: 'user/message',
+    seq: 1,
+    time: 1,
+    data: {
+      id: 'skill-context',
+      role: 'user',
+      content: [{ type: 'text', text: '<skill_content name="code-review">large body</skill_content>' }],
+      source: { kind: 'skill-invocation', name: 'code-review', form: 'instructions' },
+    },
+  }), [{ kind: 'note', text: 'skill: code-review' }])
 })
 
 test('store resets session state and tracks active subagents', () => {
@@ -360,6 +375,50 @@ test('runtime command descriptors preserve input hints for goal and plan command
       },
     ],
   })
+})
+
+test('runtime skill discovery returns only user-invocable summaries for the session workspace', async () => {
+  const agent = { id: 'session-skills', session: { header: { cwd: '/tmp/project' } } }
+  const lookups: unknown[] = []
+  const server = {
+    sessions: new Map([
+      ['session-skills', { handle: { agent } }],
+    ]),
+    ctx: {
+      skills: {
+        list: async (lookup: unknown) => {
+          lookups.push(lookup)
+          return [
+            {
+              name: 'code-review',
+              description: 'Review code changes',
+              invocation: { modelInvocable: true, userInvocable: true },
+              source: 'user-agents',
+              provider: 'local',
+            },
+            {
+              name: 'model-only',
+              description: 'Hidden from users',
+              invocation: { modelInvocable: true, userInvocable: false },
+              source: 'runtime',
+              provider: 'runtime',
+            },
+          ]
+        },
+      },
+    },
+  }
+
+  assert.deepEqual(await listRuntimeSkills(server, 'session-skills'), {
+    skills: [{
+      name: 'code-review',
+      description: 'Review code changes',
+      modelInvocable: true,
+      source: 'user-agents',
+    }],
+  })
+  assert.equal((lookups[0] as { cwd?: string }).cwd, '/tmp/project')
+  assert.equal((lookups[0] as { scope?: unknown }).scope, agent)
 })
 
 test('cursor movement keeps Unicode graphemes intact', () => {

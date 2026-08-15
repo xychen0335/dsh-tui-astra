@@ -39,7 +39,7 @@
       maxBytes: 8192
       projectRootMarkers: ['.git', 'README.md']
     skills:
-      enabled: false
+      enabled: true
     goals: {}
     toolBash:
       enableRunInBackground: false

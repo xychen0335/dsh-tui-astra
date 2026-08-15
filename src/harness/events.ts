@@ -72,6 +72,9 @@ export function argsSummary(args: string): string {
 export function classifySessionEvent(event: SessionEvent): UiAction[] {
   switch (event.type) {
     case 'user/message': {
+      if (event.data.source.kind === 'skill-invocation') {
+        return [{ kind: 'note', text: `skill: ${event.data.source.name}` }]
+      }
       const text = contentToText(event.data.content)
       const injected = event.data.source.kind !== 'user'
       return [{ kind: 'user-message', id: event.data.id, text, injected }]

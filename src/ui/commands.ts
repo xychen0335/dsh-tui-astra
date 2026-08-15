@@ -1,5 +1,5 @@
 /** Discoverable slash commands shown by the input palette. */
-export type CommandSource = 'local' | 'prompt' | 'runtime'
+export type CommandSource = 'local' | 'prompt' | 'runtime' | 'skill'
 
 export interface SlashCommand {
   /** Lowercase command name without the leading slash. */
@@ -8,6 +8,8 @@ export interface SlashCommand {
   inputHint?: string
   description: string
   source: CommandSource
+  /** Whether this skill is also available to the model-facing skill tool. */
+  modelInvocable?: boolean
 }
 
 export interface ParsedCommandLine {

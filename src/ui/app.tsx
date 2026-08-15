@@ -59,6 +59,7 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
   const [paletteRows, setPaletteRows] = useState(0)
   const [sessionPicker, setSessionPicker] = useState<SessionPickerState | null>(null)
   const [runtimeCommands, setRuntimeCommands] = useState<readonly SlashCommand[]>([])
+  const [runtimeSkills, setRuntimeSkills] = useState<readonly SlashCommand[]>([])
   const interrupting = useRef(false)
 
   const latestActivity = state.activities[state.activities.length - 1]
@@ -113,9 +114,33 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
       })
   }
 
+  const refreshRuntimeSkills = (): void => {
+    const sessionId = bridge.getSessionId()
+    void bridge.listSkills()
+      .then((skills) => {
+        if (bridge.getSessionId() !== sessionId) return
+        setRuntimeSkills(skills.map((skill) => ({
+          name: skill.name,
+          description: skill.modelInvocable ? skill.description : `user only · ${skill.description}`,
+          source: 'skill' as const,
+          modelInvocable: skill.modelInvocable,
+        })))
+      })
+      .catch((error: unknown) => {
+        note(`cannot load skills: ${error instanceof Error ? error.message : String(error)}`)
+      })
+  }
+
+  const refreshRuntimeCatalog = (): void => {
+    refreshRuntimeCommands()
+    refreshRuntimeSkills()
+  }
+
   useEffect(() => {
-    if (state.phase === 'idle' && runtimeCommands.length === 0) refreshRuntimeCommands()
-  }, [state.phase, state.sessionId, runtimeCommands.length])
+    if (state.phase === 'idle' && (runtimeCommands.length === 0 || runtimeSkills.length === 0)) {
+      refreshRuntimeCatalog()
+    }
+  }, [state.phase, state.sessionId, runtimeCommands.length, runtimeSkills.length])
 
   const resumeSession = (id: string): void => {
     if (state.phase === 'running' || state.phase === 'starting') {
@@ -135,7 +160,8 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
         bridge.newSession(session.id)
         store.restoreSession(session.id, session.events.flatMap(classifySessionEvent))
         setRuntimeCommands([])
-        refreshRuntimeCommands()
+        setRuntimeSkills([])
+        refreshRuntimeCatalog()
         setSessionPicker(null)
         note(`resumed ${session.title ?? session.id} · ${session.workspace}`)
       })
@@ -181,11 +207,17 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
         void bridge.executeCommand(text)
           .then((execution) => {
             if (!execution.matched) note(`runtime command disappeared: /${parsed.name}`)
-            refreshRuntimeCommands()
+            refreshRuntimeCatalog()
           })
           .catch((error: unknown) => {
             note(`/${parsed.name} failed: ${error instanceof Error ? error.message : String(error)}`)
           })
+        return
+      }
+      if (command.source === 'skill') {
+        bridge.send(text).catch((error: unknown) => {
+          note(`/${parsed.name} failed: ${error instanceof Error ? error.message : String(error)}`)
+        })
         return
       }
       handleCommand(parsed.name, parsed.rawInput)
@@ -209,7 +241,8 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
         const sessionId = bridge.newSession(id)
         store.resetSession(sessionId)
         setRuntimeCommands([])
-        refreshRuntimeCommands()
+        setRuntimeSkills([])
+        refreshRuntimeCatalog()
         note(id === undefined ? `started session ${sessionId}` : `switched to session ${id}`)
         return
       }
@@ -256,7 +289,7 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
     }
   }
 
-  const commands = mergeCommands(LOCAL_COMMANDS, PROMPT_COMMANDS, runtimeCommands)
+  const commands = mergeCommands(LOCAL_COMMANDS, PROMPT_COMMANDS, runtimeCommands, runtimeSkills)
 
   return (
     <Box flexDirection="column">

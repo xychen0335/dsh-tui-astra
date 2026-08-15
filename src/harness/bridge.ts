@@ -21,6 +21,8 @@ import type {
   CommandsExecuteResult,
   RuntimeCommandDescriptor,
 } from './command-protocol.ts'
+import { decodeSkillsList } from './skill-protocol.ts'
+import type { RuntimeSkillDescriptor } from './skill-protocol.ts'
 
 /** Launch plus session-route settings for one bridge. */
 export interface BridgeOptions {
@@ -158,6 +160,12 @@ export class HarnessBridge {
       sessionId: this.sessionId,
       line,
     }))
+  }
+
+  /** Discover user-invocable skills visible to the current session agent. */
+  async listSkills(): Promise<readonly RuntimeSkillDescriptor[]> {
+    const client = await this.activeClient()
+    return decodeSkillsList(await client.request('skills/list', { sessionId: this.sessionId }))
   }
 
   private async activeClient(): Promise<HarnessClient> {
