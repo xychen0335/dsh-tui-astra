@@ -44,11 +44,7 @@
 ## 安装
 
 ```sh
-git clone <repository-url> dsh-tui-astra
-cd dsh-tui-astra
-pnpm install
-pnpm build
-npm link
+npm install --global dsh-tui-astra@0.1.0
 ```
 
 安装完成后，可以在任意工作目录启动：
@@ -64,7 +60,28 @@ dsh
 dsh --cwd /path/to/project
 ```
 
-开发时直接运行 TypeScript 源码：
+升级或回退时显式指定目标版本，npm 会统一替换现有全局版本：
+
+```sh
+npm install --global dsh-tui-astra@<version>
+```
+
+卸载：
+
+```sh
+npm uninstall --global dsh-tui-astra
+```
+
+## 本地开发
+
+```sh
+git clone https://github.com/xychen0335/dsh-tui-astra.git
+cd dsh-tui-astra
+pnpm install
+pnpm build
+```
+
+直接运行 TypeScript 源码：
 
 ```sh
 pnpm dev -- --cwd /path/to/project
