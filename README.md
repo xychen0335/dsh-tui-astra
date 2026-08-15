@@ -183,6 +183,19 @@ history，不提供 `--api-key <value>` 参数。也可以在 TUI 中执行 `/mo
 可跳过选择器直接切换。自定义 provider 必须显式指定模型；手工声明的新 route
 通常还需要 Base URL 和 protocol。
 
+`/model` 界面参考 Pi 的职责拆分：
+
+- **Models**：输入即搜索，`↑`/`↓` 选择，`Enter` 热切换；
+- **Providers**：按 `Tab` 进入，查看已配置、可用和缺少凭证的 Provider；
+- 在 Providers 中按 `Enter` 可编辑已有配置，API Key 只显示是否已配置；
+- “Test connection / discover models” 不保存草稿，可先验证 endpoint、协议和 Key；
+- “Save configuration” 只保存，“Save and use” 保存后立即切换；
+- 自定义 Provider 可删除；当前正在使用的 Provider 需先切换到其他模型。
+
+编辑字段时第一次输入会替换原值，而不是追加到末尾；`Esc` 退出字段编辑并保留
+当前草稿。新建自定义 Provider 默认使用 `openai-completions`，多数兼容接口只需
+填写 route、model、Base URL 和 API Key。
+
 ## 快捷键
 
 | 按键 | 动作 |

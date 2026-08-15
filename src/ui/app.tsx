@@ -22,7 +22,11 @@ import { Status } from './status.tsx'
 import { Input } from './input.tsx'
 import { SessionPicker } from './session-picker.tsx'
 import { ModelPicker } from './model-picker.tsx'
-import type { ConfigureProviderInput, RuntimeModelsResult } from '../harness/model-protocol.ts'
+import type {
+  RuntimeModelsResult,
+  RuntimeProviderDescriptor,
+  SaveProviderInput,
+} from '../harness/model-protocol.ts'
 import { classifySessionEvent } from '../harness/events.ts'
 import { listSessions, loadSession } from '../sessions.ts'
 import type { SavedSession } from '../sessions.ts'
@@ -56,6 +60,7 @@ interface SessionPickerState {
 }
 
 interface ModelPickerState extends RuntimeModelsResult {
+  providers: readonly RuntimeProviderDescriptor[]
   loading: boolean
   busy: boolean
   error?: string
@@ -210,18 +215,20 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
       current: { provider: state.provider, model: state.model },
       groups: [],
       failures: [],
+      providers: [],
       loading: true,
       busy: false,
     })
-    void bridge.listModels()
-      .then((models) => {
-        setModelPicker({ ...models, loading: false, busy: false })
+    void Promise.all([bridge.listModels(), bridge.listProviders()])
+      .then(([models, providers]) => {
+        setModelPicker({ ...models, providers, loading: false, busy: false })
       })
       .catch((error: unknown) => {
         setModelPicker({
           current: { provider: state.provider, model: state.model },
           groups: [],
           failures: [],
+          providers: [],
           loading: false,
           busy: false,
           error: error instanceof Error ? error.message : String(error),
@@ -244,13 +251,55 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
       })
   }
 
-  const configureProvider = (input: ConfigureProviderInput): void => {
+  const saveProvider = (input: SaveProviderInput): void => {
     setModelPicker(current => current === null ? null : { ...current, busy: true, error: undefined })
-    void bridge.configureProvider(input)
-      .then((selected) => {
-        store.applyMany([{ kind: 'context', provider: selected.provider, model: selected.model }])
-        setModelPicker(null)
-        note(`provider configured · ${selected.provider}/${selected.model}`)
+    void bridge.saveProvider(input)
+      .then(async ({ selected }) => {
+        if (selected !== undefined) {
+          store.applyMany([{ kind: 'context', provider: selected.provider, model: selected.model }])
+          setModelPicker(null)
+          note(`provider configured · ${selected.provider}/${selected.model}`)
+          return
+        }
+        const [models, providers] = await Promise.all([bridge.listModels(), bridge.listProviders()])
+        setModelPicker({ ...models, providers, loading: false, busy: false })
+        note(`provider saved · ${input.provider}`)
+      })
+      .catch((error: unknown) => {
+        setModelPicker(current => current === null
+          ? null
+          : { ...current, busy: false, error: error instanceof Error ? error.message : String(error) })
+      })
+  }
+
+  const deleteProvider = (provider: string): void => {
+    setModelPicker(current => current === null ? null : { ...current, busy: true, error: undefined })
+    void bridge.deleteProvider(provider)
+      .then(async () => {
+        const [models, providers] = await Promise.all([bridge.listModels(), bridge.listProviders()])
+        setModelPicker({ ...models, providers, loading: false, busy: false })
+        note(`provider deleted · ${provider}`)
+      })
+      .catch((error: unknown) => {
+        setModelPicker(current => current === null
+          ? null
+          : { ...current, busy: false, error: error instanceof Error ? error.message : String(error) })
+      })
+  }
+
+  const testProvider = (input: Omit<SaveProviderInput, 'model' | 'select'>): void => {
+    setModelPicker(current => current === null ? null : { ...current, busy: true, error: undefined })
+    void bridge.testProvider(input)
+      .then((models) => {
+        setModelPicker(current => current === null
+          ? null
+          : {
+              ...current,
+              busy: false,
+              error: models.length === 0
+                ? 'Connection succeeded, but the provider returned no models.'
+                : `Connection succeeded · ${models.slice(0, 5).map(model => model.id).join(', ')}${models.length > 5 ? ` · +${models.length - 5} more` : ''}`,
+            })
       })
       .catch((error: unknown) => {
         setModelPicker(current => current === null
@@ -382,13 +431,16 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
       {modelPicker !== null && (
         <ModelPicker
           groups={modelPicker.groups}
+          providers={modelPicker.providers}
           current={modelPicker.current}
           loading={modelPicker.loading}
           busy={modelPicker.busy}
           error={modelPicker.error
             ?? (modelPicker.failures.map(failure => `${failure.name}: ${failure.message}`).join('\n') || undefined)}
           onSelect={selectModel}
-          onConfigure={configureProvider}
+          onSaveProvider={saveProvider}
+          onTestProvider={testProvider}
+          onDeleteProvider={deleteProvider}
           onCancel={() => { setModelPicker(null) }}
         />
       )}

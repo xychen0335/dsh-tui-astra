@@ -18,7 +18,12 @@ import type { Agent, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-
 import type { CommandDescriptor, CommandExecution } from '@deepseek-ai/dsh-commands'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
-import type { LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
+import type {
+  LlmConfigurableProvider,
+  LlmModelInfo,
+  LlmProviderInfo,
+  LlmResolvedModelInfo,
+} from '@deepseek-ai/dsh-llm'
 import { isUserInvocable } from '@deepseek-ai/dsh-skill'
 import type { SkillSummary } from '@deepseek-ai/dsh-skill'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
@@ -66,9 +71,14 @@ interface ResumeRuntimeContext {
   }
   llm: {
     listProviders(): LlmProviderInfo[]
+    listConfigurableProviders(): LlmConfigurableProvider[]
     listModels(provider: string): Promise<LlmModelInfo[]>
     resolveModelInfo(provider: string, model: string): Promise<LlmResolvedModelInfo>
     resolveCallConfig(config: { provider: string; model: string }): Promise<{ provider: string; model: string }>
+    discoverModels(
+      settingsNs: string,
+      request: { provider?: string; baseURL?: string; api?: string; apiKey?: string },
+    ): Promise<readonly { id: string; name?: string }[]>
   }
   credentials: CredentialProvider
   settings: SettingsProvider
@@ -130,6 +140,31 @@ prototype.handleRequest = async function (
       sessionId: requiredString(params, 'sessionId'),
       provider: requiredString(params, 'provider'),
       model: requiredString(params, 'model'),
+      baseURL: optionalString(params, 'baseURL'),
+      api: optionalString(params, 'api'),
+      apiKey: optionalString(params, 'apiKey'),
+    })
+  }
+  if (method === 'providers/list') {
+    return listRuntimeProviders(this)
+  }
+  if (method === 'providers/save') {
+    return saveRuntimeProvider(this, {
+      sessionId: requiredString(params, 'sessionId'),
+      provider: requiredString(params, 'provider'),
+      model: optionalString(params, 'model'),
+      baseURL: optionalString(params, 'baseURL'),
+      api: optionalString(params, 'api'),
+      apiKey: optionalString(params, 'apiKey'),
+      select: optionalBoolean(params, 'select') ?? false,
+    })
+  }
+  if (method === 'providers/delete') {
+    return deleteRuntimeProvider(this, requiredString(params, 'provider'))
+  }
+  if (method === 'providers/test') {
+    return testRuntimeProvider(this, {
+      provider: requiredString(params, 'provider'),
       baseURL: optionalString(params, 'baseURL'),
       api: optionalString(params, 'api'),
       apiKey: optionalString(params, 'apiKey'),
@@ -296,6 +331,183 @@ export async function configureRuntimeProvider(
   return selectRuntimeModel(server, input.sessionId, input.provider, input.model)
 }
 
+/** Describe active and configurable providers without exposing credentials. */
+export async function listRuntimeProviders(
+  server: Pick<ResumeAwareServer, 'ctx'>,
+): Promise<{
+  providers: readonly {
+    id: string
+    name: string
+    active: boolean
+    configured: boolean
+    builtIn: boolean
+    declared?: boolean
+    baseURL?: string
+    api?: string
+    model?: string
+    credentialRef?: string
+    credentialConfigured: boolean
+    credentialSource?: string
+    credentialWritable: boolean
+  }[]
+}> {
+  const active = new Map(server.ctx.llm.listProviders().map(provider => [provider.id, provider]))
+  const configurable = server.ctx.llm.listConfigurableProviders()
+  const descriptors = server.ctx.settings.describe({ redactSecrets: true })
+  const piDescriptor = descriptors.find(descriptor => String(descriptor.ns) === 'llm-pi-ai')
+  const deepSeekDescriptor = descriptors.find(descriptor => String(descriptor.ns) === 'llm-deepseek')
+  const piProviders = nestedRecord(piDescriptor?.user, 'providers')
+  const ids = new Set<string>([
+    ...active.keys(),
+    ...configurable.map(entry => entry.provider),
+    ...Object.keys(piProviders),
+  ])
+  const providers = await Promise.all([...ids].map(async (id) => {
+    const live = active.get(id)
+    const configurableEntry = configurable.find(entry => entry.provider === id)
+    const builtIn = id === 'deepseek-official'
+    const profile = builtIn ? recordOrEmpty(deepSeekDescriptor?.user) : recordOrEmpty(piProviders[id])
+    const configured = builtIn
+      ? deepSeekDescriptor?.user !== undefined
+      : Object.hasOwn(piProviders, id)
+    const refName = builtIn
+      ? 'DEEPSEEK_API_KEY'
+      : (typeof profile['apiKeyEnv'] === 'string' ? profile['apiKeyEnv'] : providerCredentialRef(id))
+    const credential = await server.ctx.credentials.describe(credentialRef(refName))
+    const models = Array.isArray(profile['models']) ? profile['models'] : []
+    const firstModel = models[0]
+    const model = typeof firstModel === 'object' && firstModel !== null && typeof firstModel['id'] === 'string'
+      ? firstModel['id']
+      : undefined
+    return {
+      id,
+      name: live?.name ?? configurableEntry?.displayName ?? id,
+      active: live !== undefined,
+      configured,
+      builtIn,
+      ...(configurableEntry?.declared === undefined ? {} : { declared: configurableEntry.declared }),
+      ...(typeof profile['baseURL'] === 'string' ? { baseURL: profile['baseURL'] } : {}),
+      ...(typeof profile['api'] === 'string' ? { api: profile['api'] } : {}),
+      ...(model === undefined ? {} : { model }),
+      credentialRef: refName,
+      credentialConfigured: credential.configured,
+      ...(credential.source === undefined ? {} : { credentialSource: credential.source }),
+      credentialWritable: credential.writable,
+    }
+  }))
+  return { providers }
+}
+
+/** Save one provider profile and optional credential. */
+export async function saveRuntimeProvider(
+  server: Pick<ResumeAwareServer, 'ctx' | 'sessions' | 'getOrCreateSession'>,
+  input: {
+    sessionId: string
+    provider: string
+    model?: string
+    baseURL?: string
+    api?: string
+    apiKey?: string
+    select: boolean
+  },
+): Promise<{ selected?: ModelSelection }> {
+  if (input.provider === 'deepseek-official') {
+    if (input.apiKey !== undefined && input.apiKey !== '') {
+      await server.ctx.credentials.set(credentialRef('DEEPSEEK_API_KEY'), input.apiKey)
+    }
+    const operations: SettingsPathOp[] = []
+    if (input.baseURL !== undefined) {
+      operations.push(input.baseURL === ''
+        ? { op: 'unset', path: ['baseURL'] }
+        : { op: 'set', path: ['baseURL'], value: input.baseURL })
+    }
+    if (operations.length > 0) {
+      await server.ctx.settings.mutate(settingsNamespace('llm-deepseek'), operations)
+    }
+  } else {
+    const refName = providerCredentialRef(input.provider)
+    if (input.apiKey !== undefined && input.apiKey !== '') {
+      await server.ctx.credentials.set(credentialRef(refName), input.apiKey)
+    }
+    const existing = await configuredPiProfile(server.ctx.settings, input.provider)
+    const existingModels = Array.isArray(existing['models']) ? existing['models'] : []
+    const existingModel = existingModels[0]
+    const model = input.model
+      ?? (typeof existingModel === 'object' && existingModel !== null && typeof existingModel['id'] === 'string'
+        ? existingModel['id']
+        : undefined)
+    if (model === undefined || model === '') throw new Error(`provider "${input.provider}" needs a model id`)
+    const profile = {
+      ...existing,
+      apiKeyEnv: typeof existing['apiKeyEnv'] === 'string' ? existing['apiKeyEnv'] : refName,
+      ...(input.baseURL === undefined ? {} : input.baseURL === '' ? { baseURL: undefined } : { baseURL: input.baseURL }),
+      ...(input.api === undefined ? {} : input.api === '' ? { api: undefined } : { api: input.api }),
+      models: [{ id: model }],
+    }
+    const cleaned = Object.fromEntries(Object.entries(profile).filter(([, value]) => value !== undefined))
+    await server.ctx.settings.mutate(settingsNamespace('llm-pi-ai'), [{
+      op: 'set',
+      path: ['providers', input.provider],
+      value: cleaned,
+    }])
+  }
+  if (!input.select) return {}
+  const model = input.model
+  if (model === undefined || model === '') throw new Error('selecting a provider requires a model id')
+  return selectRuntimeModel(server, input.sessionId, input.provider, model)
+}
+
+/** Delete a custom provider profile and its managed credential. */
+export async function deleteRuntimeProvider(
+  server: Pick<ResumeAwareServer, 'ctx'>,
+  provider: string,
+): Promise<Record<string, never>> {
+  if (provider === 'deepseek-official') throw new Error('the built-in DeepSeek provider cannot be deleted')
+  const profile = await configuredPiProfile(server.ctx.settings, provider)
+  const refName = typeof profile['apiKeyEnv'] === 'string' ? profile['apiKeyEnv'] : providerCredentialRef(provider)
+  await server.ctx.settings.mutate(settingsNamespace('llm-pi-ai'), [{
+    op: 'unset',
+    path: ['providers', provider],
+  }])
+  const info = await server.ctx.credentials.describe(credentialRef(refName))
+  if (info.configured && info.writable) await server.ctx.credentials.unset(credentialRef(refName))
+  return {}
+}
+
+/** Probe a provider draft without persisting settings or credentials. */
+export async function testRuntimeProvider(
+  server: Pick<ResumeAwareServer, 'ctx'>,
+  input: { provider: string; baseURL?: string; api?: string; apiKey?: string },
+): Promise<{ models: readonly { id: string; name: string }[] }> {
+  if (input.provider === 'deepseek-official') {
+    const models = await server.ctx.llm.listModels(input.provider)
+    return { models: models.map(model => ({ id: model.id, name: model.name })) }
+  }
+  const existing = await configuredPiProfile(server.ctx.settings, input.provider)
+  const refName = typeof existing['apiKeyEnv'] === 'string'
+    ? existing['apiKeyEnv']
+    : providerCredentialRef(input.provider)
+  const storedCredential = input.apiKey === undefined || input.apiKey === ''
+    ? await server.ctx.credentials.resolve(credentialRef(refName))
+    : undefined
+  const apiKey = input.apiKey === undefined || input.apiKey === ''
+    ? storedCredential?.value
+    : input.apiKey
+  const baseURL = input.baseURL === undefined || input.baseURL === ''
+    ? (typeof existing['baseURL'] === 'string' ? existing['baseURL'] : undefined)
+    : input.baseURL
+  const api = input.api === undefined || input.api === ''
+    ? (typeof existing['api'] === 'string' ? existing['api'] : undefined)
+    : input.api
+  const models = await server.ctx.llm.discoverModels('llm-pi-ai', {
+    provider: input.provider,
+    ...(baseURL === undefined ? {} : { baseURL }),
+    ...(api === undefined ? {} : { api }),
+    ...(apiKey === undefined ? {} : { apiKey }),
+  })
+  return { models: models.map(model => ({ id: model.id, name: model.name ?? model.id })) }
+}
+
 /** Select the correct agent factory path for a process-local unknown id. */
 export async function createOrResumeRuntimeSession(
   server: ResumeAwareServer,
@@ -344,6 +556,13 @@ function optionalString(params: Record<string, unknown> | undefined, key: string
   return value
 }
 
+function optionalBoolean(paramsHandle: Record<string, unknown> | undefined, key: string): boolean | undefined {
+  const value = paramsHandle?.[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'boolean') throw new TypeError(`${key} must be a boolean`)
+  return value
+}
+
 const modelSelections = new WeakMap<Agent, ModelSelectionRef>()
 
 /** Install the same agent-scoped hot-switch seam used by the official Web host. */
@@ -380,4 +599,19 @@ function modelSelectionFor(agent: Agent): ModelSelectionRef & { current: ModelSe
 function providerCredentialRef(provider: string): string {
   const normalized = provider.toUpperCase().replaceAll(/[^A-Z0-9_]/gu, '_')
   return `DSH_PROVIDER_${normalized}_API_KEY`
+}
+
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function nestedRecord(value: unknown, key: string): Record<string, unknown> {
+  return recordOrEmpty(recordOrEmpty(value)[key])
+}
+
+async function configuredPiProfile(settings: SettingsProvider, provider: string): Promise<Record<string, unknown>> {
+  const descriptor = settings.describe().find(entry => String(entry.ns) === 'llm-pi-ai')
+  return recordOrEmpty(nestedRecord(descriptor?.user, 'providers')[provider])
 }

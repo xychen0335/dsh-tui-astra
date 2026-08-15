@@ -24,13 +24,19 @@ import type {
 import { decodeSkillsList } from './skill-protocol.ts'
 import type { RuntimeSkillDescriptor } from './skill-protocol.ts'
 import {
+  decodeProviders,
+  decodeSavedProvider,
+  decodeTestedProvider,
   decodeModels,
   decodeSelectedModel,
 } from './model-protocol.ts'
 import type {
   ConfigureProviderInput,
+  RuntimeProviderDescriptor,
   RuntimeModelsResult,
   RuntimeModelSelection,
+  SaveProviderInput,
+  TestProviderInput,
 } from './model-protocol.ts'
 
 /** Launch plus session-route settings for one bridge. */
@@ -200,6 +206,33 @@ export class HarnessBridge {
       sessionId: this.sessionId,
       ...input,
     }))
+  }
+
+  /** List configurable providers and their stored credential/config status. */
+  async listProviders(): Promise<readonly RuntimeProviderDescriptor[]> {
+    const client = await this.activeClient()
+    return decodeProviders(await client.request('providers/list'))
+  }
+
+  /** Create or update a provider profile, optionally selecting its model. */
+  async saveProvider(input: SaveProviderInput): Promise<{ selected?: RuntimeModelSelection }> {
+    const client = await this.activeClient()
+    return decodeSavedProvider(await client.request('providers/save', {
+      sessionId: this.sessionId,
+      ...input,
+    }))
+  }
+
+  /** Remove a custom provider profile and its managed credential. */
+  async deleteProvider(provider: string): Promise<void> {
+    const client = await this.activeClient()
+    await client.request('providers/delete', { provider })
+  }
+
+  /** Test a provider draft without storing its endpoint or credential. */
+  async testProvider(input: TestProviderInput): Promise<readonly { id: string; name: string }[]> {
+    const client = await this.activeClient()
+    return decodeTestedProvider(await client.request('providers/test', input))
   }
 
   private async activeClient(): Promise<HarnessClient> {

@@ -25,12 +25,17 @@ import { isMouseReport } from '../src/ui/terminal-input.ts'
 import {
   configureRuntimeProvider,
   createOrResumeRuntimeSession,
+  deleteRuntimeProvider,
   executeRuntimeCommand,
+  listRuntimeProviders,
   listRuntimeCommands,
   listRuntimeModels,
   listRuntimeSkills,
+  saveRuntimeProvider,
   selectRuntimeModel,
+  testRuntimeProvider,
 } from '../src/runtime-server.ts'
+import { matchesModelQuery, providerForm } from '../src/ui/model-picker.tsx'
 
 function notification(method: string, params: Record<string, unknown>): HarnessNotification {
   return { method, params } as HarnessNotification
@@ -615,6 +620,204 @@ test('interactive provider configuration stores secrets through the credential s
   assert.deepEqual(credentials, [['DSH_PROVIDER_COMPANY_API_KEY', 'secret-value']])
   assert.equal(JSON.stringify(mutations).includes('secret-value'), false)
   assert.match(JSON.stringify(mutations), /llm-pi-ai/)
+})
+
+test('provider management returns editable metadata without returning secret values', async () => {
+  const server = {
+    ctx: {
+      llm: {
+        listProviders: () => [{ id: 'company', name: 'Company LLM' }],
+        listConfigurableProviders: () => [{
+          provider: 'company',
+          displayName: 'Company LLM',
+          settingsNs: 'llm-pi-ai',
+          settingsPath: ['providers', 'company'],
+          declared: true,
+        }],
+      },
+      settings: {
+        describe: () => [{
+          ns: 'llm-pi-ai',
+          user: {
+            providers: {
+              company: {
+                apiKeyEnv: 'DSH_PROVIDER_COMPANY_API_KEY',
+                baseURL: 'https://llm.company.example/v1',
+                api: 'openai-completions',
+                models: [{ id: 'company-large' }],
+              },
+            },
+          },
+        }],
+      },
+      credentials: {
+        describe: async () => ({
+          configured: true,
+          source: 'file',
+          writable: true,
+        }),
+      },
+    },
+  }
+
+  assert.deepEqual(await listRuntimeProviders(server), {
+    providers: [{
+      id: 'company',
+      name: 'Company LLM',
+      active: true,
+      configured: true,
+      builtIn: false,
+      declared: true,
+      baseURL: 'https://llm.company.example/v1',
+      api: 'openai-completions',
+      model: 'company-large',
+      credentialRef: 'DSH_PROVIDER_COMPANY_API_KEY',
+      credentialConfigured: true,
+      credentialSource: 'file',
+      credentialWritable: true,
+    }],
+  })
+  assert.equal(JSON.stringify(await listRuntimeProviders(server)).includes('secret'), false)
+})
+
+test('provider management edits existing profiles and deletes managed credentials', async () => {
+  const operations: unknown[] = []
+  const credentials: string[] = []
+  const agent = {
+    id: 'session-provider-management',
+    options: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+    session: { requestHeader: () => undefined, header: { cwd: '/tmp/project' } },
+    ctx: { on: () => () => {} },
+  }
+  const settings = {
+    describe: () => [{
+      ns: 'llm-pi-ai',
+      user: {
+        providers: {
+          company: {
+            apiKeyEnv: 'DSH_PROVIDER_COMPANY_API_KEY',
+            baseURL: 'https://old.example/v1',
+            api: 'openai-completions',
+            models: [{ id: 'old-model' }],
+          },
+        },
+      },
+    }],
+    mutate: async (_namespace: string, ops: unknown[]) => { operations.push(...ops) },
+  }
+  const server = {
+    sessions: new Map([['session-provider-management', { handle: { agent } }]]),
+    ctx: {
+      settings,
+      credentials: {
+        set: async (ref: string) => { credentials.push(`set:${String(ref)}`) },
+        describe: async () => ({ configured: true, source: 'file', writable: true }),
+        unset: async (ref: string) => { credentials.push(`unset:${String(ref)}`) },
+      },
+      llm: {
+        resolveCallConfig: async ({ provider, model }: { provider: string; model: string }) => ({ provider, model }),
+      },
+    },
+  }
+
+  assert.deepEqual(await saveRuntimeProvider(server, {
+    sessionId: 'session-provider-management',
+    provider: 'company',
+    model: 'new-model',
+    baseURL: 'https://new.example/v1',
+    api: 'openai-responses',
+    apiKey: 'new-secret',
+    select: true,
+  }), {
+    selected: { provider: 'company', model: 'new-model' },
+  })
+  assert.deepEqual(credentials, ['set:DSH_PROVIDER_COMPANY_API_KEY'])
+  assert.equal(JSON.stringify(operations).includes('new-secret'), false)
+  assert.match(JSON.stringify(operations), /new-model/)
+
+  assert.deepEqual(await deleteRuntimeProvider(server, 'company'), {})
+  assert.deepEqual(credentials, [
+    'set:DSH_PROVIDER_COMPANY_API_KEY',
+    'unset:DSH_PROVIDER_COMPANY_API_KEY',
+  ])
+  assert.match(JSON.stringify(operations.at(-1)), /unset/)
+})
+
+test('provider connection testing reuses the stored credential without exposing it', async () => {
+  const discoveries: unknown[] = []
+  const server = {
+    ctx: {
+      settings: {
+        describe: () => [{
+          ns: 'llm-pi-ai',
+          user: {
+            providers: {
+              company: {
+                apiKeyEnv: 'DSH_PROVIDER_COMPANY_API_KEY',
+                baseURL: 'https://company.example/v1',
+                api: 'openai-responses',
+              },
+            },
+          },
+        }],
+      },
+      credentials: {
+        resolve: async () => ({ value: 'stored-secret', source: 'file' }),
+      },
+      llm: {
+        discoverModels: async (_namespace: string, request: unknown) => {
+          discoveries.push(request)
+          return [{ id: 'company-large', name: 'Company Large' }]
+        },
+      },
+    },
+  }
+
+  assert.deepEqual(await testRuntimeProvider(server, { provider: 'company' }), {
+    models: [{ id: 'company-large', name: 'Company Large' }],
+  })
+  assert.deepEqual(discoveries, [{
+    provider: 'company',
+    baseURL: 'https://company.example/v1',
+    api: 'openai-responses',
+    apiKey: 'stored-secret',
+  }])
+})
+
+test('model picker pre-fills existing provider fields and searches provider/model text', () => {
+  const form = providerForm({
+    id: 'company',
+    name: 'Company',
+    active: true,
+    configured: true,
+    builtIn: false,
+    baseURL: 'https://company.example/v1',
+    api: 'openai-responses',
+    model: 'company-large',
+    credentialConfigured: true,
+    credentialSource: 'file',
+    credentialWritable: true,
+  })
+  assert.deepEqual(form, {
+    provider: 'company',
+    model: 'company-large',
+    baseURL: 'https://company.example/v1',
+    api: 'openai-responses',
+    apiKey: '',
+  })
+  assert.equal(providerForm().api, 'openai-completions')
+  assert.equal(matchesModelQuery({
+    provider: 'company',
+    providerName: 'Company',
+    model: 'company-large',
+    name: 'Company Large',
+  }, 'company/large'), true)
+  assert.equal(matchesModelQuery({
+    provider: 'company',
+    providerName: 'Company',
+    model: 'company-large',
+    name: 'Company Large',
+  }, 'anthropic'), false)
 })
 
 test('cursor movement keeps Unicode graphemes intact', () => {
