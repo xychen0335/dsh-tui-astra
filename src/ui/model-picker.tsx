@@ -9,6 +9,7 @@ import type {
   RuntimeModelSelection,
 } from '../harness/model-protocol.ts'
 import { DEEPSEEK_BLUE, DEEPSEEK_BLUE_DARK } from './theme.ts'
+import { isMouseReport } from './terminal-input.ts'
 
 export interface ModelPickerProps {
   groups: readonly RuntimeModelGroup[]
@@ -79,6 +80,10 @@ export function ModelPicker({
   }, [current.model, current.provider, rows])
 
   useInput((input, key) => {
+    // Transcript scrolling enables SGR mouse reporting globally. Ink may pass
+    // those reports through as text; never persist them into provider fields
+    // or credentials.
+    if (isMouseReport(input)) return
     if (key.escape) {
       if (form !== null) {
         setForm(null)

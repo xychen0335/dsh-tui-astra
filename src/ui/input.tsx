@@ -14,6 +14,7 @@ import { Box, Text, useInput } from 'ink'
 import { STATIC_COMMANDS, matchingCommands } from './commands.ts'
 import type { SlashCommand } from './commands.ts'
 import { DEEPSEEK_BLUE } from './theme.ts'
+import { isMouseReport } from './terminal-input.ts'
 
 export interface InputProps {
   /** Called with the submitted text (trimmed, non-empty). */
@@ -59,7 +60,7 @@ export function Input({
   useInput((input, key) => {
     // Mouse reporting is enabled for transcript wheel/trackpad scrolling.
     // Ink does not classify SGR mouse sequences, so never treat them as text.
-    if (/\[<\d+;\d+;\d+[Mm]/.test(input)) return
+    if (isMouseReport(input)) return
     if (key.return) {
       const text = value
       setValue('')

@@ -21,6 +21,7 @@ import {
 } from '../src/ui/commands.ts'
 import { nextGraphemeBoundary, previousGraphemeBoundary } from '../src/ui/input.tsx'
 import { relativeTime, shortSessionId } from '../src/ui/session-picker.tsx'
+import { isMouseReport } from '../src/ui/terminal-input.ts'
 import {
   configureRuntimeProvider,
   createOrResumeRuntimeSession,
@@ -624,6 +625,12 @@ test('cursor movement keeps Unicode graphemes intact', () => {
   assert.equal(text.slice(afterA, afterEmoji), '👨‍👩‍👧‍👦')
   assert.equal(text.slice(afterEmoji, afterAccent), 'é')
   assert.equal(previousGraphemeBoundary(text, afterAccent), afterEmoji)
+})
+
+test('model forms reject terminal mouse reports instead of corrupting credentials', () => {
+  assert.equal(isMouseReport('[<0;5;32M'), true)
+  assert.equal(isMouseReport('[<64;80;24M'), true)
+  assert.equal(isMouseReport('normal-api-key'), false)
 })
 
 test('conversation rows use the compact single-column visual language', () => {
