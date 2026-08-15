@@ -338,3 +338,13 @@ pnpm build
 - 自定义插件目前通过完整 `--cordis` 配置加载，还没有 overlay 和安装管理。
 - 会话选择器默认展示最近 6 个会话；仍可使用 `/resume <session-id>` 恢复其他会话。
 - `Esc` 通过替换 JSON-RPC 运行时实现中止，因此会有很短的重连过程。
+
+## 致谢
+
+本项目建立在以下开源项目之上，衷心感谢它们的作者与社区：
+
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：整套运行时以
+  Harness 的 JSON-RPC 与 Cordis 插件为基础，命令、技能、模型提供方和会话均与
+  原生 Harness 共享实现与数据格式。
+- [Pi Agent](https://github.com/earendil-works/pi)：借鉴其 TUI 与 agent 交互设计，
+  并依赖其 `@earendil-works/pi-tui` 库实现终端界面渲染。
