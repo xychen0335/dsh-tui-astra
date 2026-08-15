@@ -13,10 +13,16 @@ import {
   HarnessSdkJsonRpcServer,
   apply as applyUpstream,
 } from '@deepseek-ai/dsh-sdk-jsonrpc-server'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import type { Agent, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandDescriptor, CommandExecution } from '@deepseek-ai/dsh-commands'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
+import type { LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import { isUserInvocable } from '@deepseek-ai/dsh-skill'
 import type { SkillSummary } from '@deepseek-ai/dsh-skill'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type { SettingsPathOp, SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type {
   CommandsExecuteResult,
@@ -26,7 +32,7 @@ import type {
 export { Config }
 
 export const name = 'sdk-jsonrpc-server-resume'
-export const inject = ['agents', 'commands', 'sessionPersistence', 'skills']
+export const inject = ['agents', 'commands', 'credentials', 'llm', 'sessionPersistence', 'settings', 'skills']
 
 type UpstreamContext = Parameters<typeof applyUpstream>[0]
 type UpstreamConfig = Parameters<typeof applyUpstream>[1]
@@ -58,6 +64,14 @@ interface ResumeRuntimeContext {
   skills: {
     list(options: { cwd?: string; scope?: Agent; signal?: AbortSignal }): Promise<SkillSummary[]>
   }
+  llm: {
+    listProviders(): LlmProviderInfo[]
+    listModels(provider: string): Promise<LlmModelInfo[]>
+    resolveModelInfo(provider: string, model: string): Promise<LlmResolvedModelInfo>
+    resolveCallConfig(config: { provider: string; model: string }): Promise<{ provider: string; model: string }>
+  }
+  credentials: CredentialProvider
+  settings: SettingsProvider
 }
 
 interface ResumeAwareServer {
@@ -99,6 +113,27 @@ prototype.handleRequest = async function (
   }
   if (method === 'skills/list') {
     return listRuntimeSkills(this, requiredString(params, 'sessionId'))
+  }
+  if (method === 'models/list') {
+    return listRuntimeModels(this, requiredString(params, 'sessionId'))
+  }
+  if (method === 'models/select') {
+    return selectRuntimeModel(
+      this,
+      requiredString(params, 'sessionId'),
+      requiredString(params, 'provider'),
+      requiredString(params, 'model'),
+    )
+  }
+  if (method === 'models/configure') {
+    return configureRuntimeProvider(this, {
+      sessionId: requiredString(params, 'sessionId'),
+      provider: requiredString(params, 'provider'),
+      model: requiredString(params, 'model'),
+      baseURL: optionalString(params, 'baseURL'),
+      api: optionalString(params, 'api'),
+      apiKey: optionalString(params, 'apiKey'),
+    })
   }
   return upstreamHandleRequest.call(this, method, params)
 }
@@ -155,6 +190,112 @@ export async function listRuntimeSkills(
   }
 }
 
+/** Return the registered provider/model directory and this session's current route. */
+export async function listRuntimeModels(
+  server: Pick<ResumeAwareServer, 'ctx' | 'sessions' | 'getOrCreateSession'>,
+  sessionId: string,
+): Promise<{
+  current: ModelSelection
+  groups: readonly {
+    id: string
+    name: string
+    models: readonly { id: string; name: string; description?: string }[]
+  }[]
+  failures: readonly { id: string; name: string; message: string }[]
+}> {
+  const agent = await runtimeAgent(server, sessionId)
+  const current = modelSelectionFor(agent).current
+  const catalog = await Promise.all(server.ctx.llm.listProviders().map(async (provider) => {
+    try {
+      const models = await server.ctx.llm.listModels(provider.id)
+      return {
+        kind: 'group' as const,
+        group: {
+          id: provider.id,
+          name: provider.name,
+          models: models.map((model) => ({
+            id: model.id,
+            name: model.name,
+            ...(model.description === undefined ? {} : { description: model.description }),
+          })),
+        },
+      }
+    } catch (error: unknown) {
+      return {
+        kind: 'failure' as const,
+        failure: {
+          id: provider.id,
+          name: provider.name,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }
+    }
+  }))
+  return {
+    current: { ...current },
+    groups: catalog.flatMap((entry) => entry.kind === 'group' && entry.group.models.length > 0 ? [entry.group] : []),
+    failures: catalog.flatMap((entry) => entry.kind === 'failure' ? [entry.failure] : []),
+  }
+}
+
+/** Select a validated route for the current session's next assembled step. */
+export async function selectRuntimeModel(
+  server: Pick<ResumeAwareServer, 'ctx' | 'sessions' | 'getOrCreateSession'>,
+  sessionId: string,
+  provider: string,
+  model: string,
+): Promise<{ selected: ModelSelection }> {
+  const agent = await runtimeAgent(server, sessionId)
+  const resolved = await server.ctx.llm.resolveCallConfig({ provider, model })
+  const selected = { provider: resolved.provider, model: resolved.model }
+  modelSelectionFor(agent).current = selected
+  return { selected }
+}
+
+/** Store one pi-ai provider profile and optional credential, then select it. */
+export async function configureRuntimeProvider(
+  server: Pick<ResumeAwareServer, 'ctx' | 'sessions' | 'getOrCreateSession'>,
+  input: {
+    sessionId: string
+    provider: string
+    model: string
+    baseURL?: string
+    api?: string
+    apiKey?: string
+  },
+): Promise<{ selected: ModelSelection }> {
+  if (input.provider === 'deepseek-official') {
+    if (input.apiKey !== undefined && input.apiKey !== '') {
+      await server.ctx.credentials.set(credentialRef('DEEPSEEK_API_KEY'), input.apiKey)
+    }
+    if (input.baseURL !== undefined && input.baseURL !== '') {
+      await server.ctx.settings.mutate(settingsNamespace('llm-deepseek'), [{
+        op: 'set',
+        path: ['baseURL'],
+        value: input.baseURL,
+      }])
+    }
+    return selectRuntimeModel(server, input.sessionId, input.provider, input.model)
+  }
+  const refName = providerCredentialRef(input.provider)
+  if (input.apiKey !== undefined && input.apiKey !== '') {
+    await server.ctx.credentials.set(credentialRef(refName), input.apiKey)
+  }
+  const profile = {
+    apiKeyEnv: refName,
+    ...(input.baseURL === undefined || input.baseURL === '' ? {} : { baseURL: input.baseURL }),
+    ...(input.api === undefined || input.api === '' ? {} : { api: input.api }),
+    models: [{ id: input.model }],
+  }
+  const operation: SettingsPathOp = {
+    op: 'set',
+    path: ['providers', input.provider],
+    value: profile,
+  }
+  await server.ctx.settings.mutate(settingsNamespace('llm-pi-ai'), [operation])
+  return selectRuntimeModel(server, input.sessionId, input.provider, input.model)
+}
+
 /** Select the correct agent factory path for a process-local unknown id. */
 export async function createOrResumeRuntimeSession(
   server: ResumeAwareServer,
@@ -194,4 +335,49 @@ function requiredString(params: Record<string, unknown> | undefined, key: string
   const value = params?.[key]
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${key} must be a non-empty string`)
   return value
+}
+
+function optionalString(params: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = params?.[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw new TypeError(`${key} must be a string`)
+  return value
+}
+
+const modelSelections = new WeakMap<Agent, ModelSelectionRef>()
+
+/** Install the same agent-scoped hot-switch seam used by the official Web host. */
+function modelSelectionFor(agent: Agent): ModelSelectionRef & { current: ModelSelection } {
+  const installed = modelSelections.get(agent)
+  if (installed !== undefined) return installed as ModelSelectionRef & { current: ModelSelection }
+  let picked: ModelSelection | undefined
+  const selection: ModelSelectionRef = {
+    get current(): ModelSelection {
+      if (picked !== undefined) return picked
+      const logged = agent.session.requestHeader()?.config
+      if (logged !== undefined) {
+        return {
+          provider: logged.provider,
+          model: logged.model,
+          ...(logged.reasoningEffort === undefined ? {} : { reasoningEffort: logged.reasoningEffort }),
+        }
+      }
+      if (agent.options.provider === undefined || agent.options.model === undefined) {
+        throw new Error(`agent "${String(agent.id)}" has no model selection`)
+      }
+      return { provider: agent.options.provider, model: agent.options.model }
+    },
+    set current(next: ModelSelection) {
+      picked = { ...next }
+    },
+    assembled: undefined,
+  }
+  installModelSelection(agent.ctx, selection)
+  modelSelections.set(agent, selection)
+  return selection as ModelSelectionRef & { current: ModelSelection }
+}
+
+function providerCredentialRef(provider: string): string {
+  const normalized = provider.toUpperCase().replaceAll(/[^A-Z0-9_]/gu, '_')
+  return `DSH_PROVIDER_${normalized}_API_KEY`
 }

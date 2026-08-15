@@ -23,6 +23,15 @@ import type {
 } from './command-protocol.ts'
 import { decodeSkillsList } from './skill-protocol.ts'
 import type { RuntimeSkillDescriptor } from './skill-protocol.ts'
+import {
+  decodeModels,
+  decodeSelectedModel,
+} from './model-protocol.ts'
+import type {
+  ConfigureProviderInput,
+  RuntimeModelsResult,
+  RuntimeModelSelection,
+} from './model-protocol.ts'
 
 /** Launch plus session-route settings for one bridge. */
 export interface BridgeOptions {
@@ -166,6 +175,31 @@ export class HarnessBridge {
   async listSkills(): Promise<readonly RuntimeSkillDescriptor[]> {
     const client = await this.activeClient()
     return decodeSkillsList(await client.request('skills/list', { sessionId: this.sessionId }))
+  }
+
+  /** Read the live provider/model directory and current session selection. */
+  async listModels(): Promise<RuntimeModelsResult> {
+    const client = await this.activeClient()
+    return decodeModels(await client.request('models/list', { sessionId: this.sessionId }))
+  }
+
+  /** Change the model used by the current session's next assembled step. */
+  async selectModel(provider: string, model: string): Promise<RuntimeModelSelection> {
+    const client = await this.activeClient()
+    return decodeSelectedModel(await client.request('models/select', {
+      sessionId: this.sessionId,
+      provider,
+      model,
+    }))
+  }
+
+  /** Store a custom provider profile and optional credential, then select it. */
+  async configureProvider(input: ConfigureProviderInput): Promise<RuntimeModelSelection> {
+    const client = await this.activeClient()
+    return decodeSelectedModel(await client.request('models/configure', {
+      sessionId: this.sessionId,
+      ...input,
+    }))
   }
 
   private async activeClient(): Promise<HarnessClient> {

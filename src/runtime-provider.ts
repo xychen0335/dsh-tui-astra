@@ -45,6 +45,5 @@ export function customProviderConfig(environment: ProviderEnvironment): PiAiConf
 /** Mount the generic adapter only when a non-DeepSeek route was requested. */
 export function apply(ctx: Context): void {
   const config = customProviderConfig(process.env)
-  if (Object.keys(config.providers ?? {}).length === 0) return
   ctx.plugin(PiAi, config)
 }

@@ -22,10 +22,13 @@ import {
 import { nextGraphemeBoundary, previousGraphemeBoundary } from '../src/ui/input.tsx'
 import { relativeTime, shortSessionId } from '../src/ui/session-picker.tsx'
 import {
+  configureRuntimeProvider,
   createOrResumeRuntimeSession,
   executeRuntimeCommand,
   listRuntimeCommands,
+  listRuntimeModels,
   listRuntimeSkills,
+  selectRuntimeModel,
 } from '../src/runtime-server.ts'
 
 function notification(method: string, params: Record<string, unknown>): HarnessNotification {
@@ -519,6 +522,98 @@ test('runtime skill discovery returns only user-invocable summaries for the sess
   })
   assert.equal((lookups[0] as { cwd?: string }).cwd, '/tmp/project')
   assert.equal((lookups[0] as { scope?: unknown }).scope, agent)
+})
+
+test('runtime model selection changes the next-step route without replacing the agent', async () => {
+  const listeners: Array<(payload: unknown, next: () => Promise<unknown>) => Promise<unknown>> = []
+  const agent = {
+    id: 'session-models',
+    options: { provider: 'provider-a', model: 'model-a' },
+    session: {
+      requestHeader: () => undefined,
+      header: { cwd: '/tmp/project' },
+    },
+    ctx: {
+      on: (_event: string, listener: (payload: unknown, next: () => Promise<unknown>) => Promise<unknown>) => {
+        listeners.push(listener)
+        return () => {}
+      },
+    },
+  }
+  const server = {
+    sessions: new Map([['session-models', { handle: { agent } }]]),
+    ctx: {
+      llm: {
+        listProviders: () => [
+          { id: 'provider-a', name: 'Provider A' },
+          { id: 'provider-b', name: 'Provider B' },
+        ],
+        listModels: async (provider: string) => provider === 'provider-a'
+          ? [{ provider, id: 'model-a', name: 'Model A' }]
+          : [{ provider, id: 'model-b', name: 'Model B' }],
+        resolveCallConfig: async ({ provider, model }: { provider: string; model: string }) => ({ provider, model }),
+      },
+    },
+  }
+
+  assert.deepEqual(await listRuntimeModels(server, 'session-models'), {
+    current: { provider: 'provider-a', model: 'model-a' },
+    groups: [
+      { id: 'provider-a', name: 'Provider A', models: [{ id: 'model-a', name: 'Model A' }] },
+      { id: 'provider-b', name: 'Provider B', models: [{ id: 'model-b', name: 'Model B' }] },
+    ],
+    failures: [],
+  })
+  assert.deepEqual(await selectRuntimeModel(server, 'session-models', 'provider-b', 'model-b'), {
+    selected: { provider: 'provider-b', model: 'model-b' },
+  })
+  assert.equal(server.sessions.get('session-models')?.handle.agent, agent)
+  assert.deepEqual((await listRuntimeModels(server, 'session-models')).current, {
+    provider: 'provider-b',
+    model: 'model-b',
+  })
+  assert.equal(listeners.length, 2)
+})
+
+test('interactive provider configuration stores secrets through the credential seam', async () => {
+  const credentials: Array<[string, string]> = []
+  const mutations: unknown[] = []
+  const agent = {
+    id: 'session-provider-config',
+    options: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+    session: { requestHeader: () => undefined, header: { cwd: '/tmp/project' } },
+    ctx: { on: () => () => {} },
+  }
+  const server = {
+    sessions: new Map([['session-provider-config', { handle: { agent } }]]),
+    ctx: {
+      credentials: {
+        set: async (ref: string, value: string) => { credentials.push([String(ref), value]) },
+      },
+      settings: {
+        mutate: async (namespace: string, operations: unknown[]) => {
+          mutations.push({ namespace: String(namespace), operations })
+        },
+      },
+      llm: {
+        resolveCallConfig: async ({ provider, model }: { provider: string; model: string }) => ({ provider, model }),
+      },
+    },
+  }
+
+  assert.deepEqual(await configureRuntimeProvider(server, {
+    sessionId: 'session-provider-config',
+    provider: 'company',
+    model: 'company-large',
+    baseURL: 'https://llm.company.example/v1',
+    api: 'openai-completions',
+    apiKey: 'secret-value',
+  }), {
+    selected: { provider: 'company', model: 'company-large' },
+  })
+  assert.deepEqual(credentials, [['DSH_PROVIDER_COMPANY_API_KEY', 'secret-value']])
+  assert.equal(JSON.stringify(mutations).includes('secret-value'), false)
+  assert.match(JSON.stringify(mutations), /llm-pi-ai/)
 })
 
 test('cursor movement keeps Unicode graphemes intact', () => {

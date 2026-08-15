@@ -173,8 +173,15 @@ dsh \
 ```
 
 CLI 和 Cordis 配置只传递环境变量名称，不复制 API Key 值。为避免凭证进入 shell
-history，不提供 `--api-key <value>` 参数。自定义 provider 必须显式指定模型；
-手工声明的新 route 通常还需要 `--base-url` 和 `--api`。
+history，不提供 `--api-key <value>` 参数。也可以在 TUI 中执行 `/model`，选择
+“Add or configure provider”，输入 route、model、endpoint、protocol 和 API Key；
+凭证写入 `$DSH_HOME/.credentials.yaml`，Provider 配置写入
+`$DSH_HOME/settings.yaml`，都在下一个请求生效，无需重启。
+
+模型选择是 session 级热切换：当前 turn 已经完成 prompt assembly 时，切换从
+下一 step 生效；空闲状态下则从下一条消息生效。`/model <provider>/<model>`
+可跳过选择器直接切换。自定义 provider 必须显式指定模型；手工声明的新 route
+通常还需要 Base URL 和 protocol。
 
 ## 快捷键
 
@@ -202,7 +209,8 @@ history，不提供 `--api-key <value>` 参数。自定义 provider 必须显式
 | `/clear` | 清空当前显示，不删除会话 |
 | `/status` | 显示运行阶段、模型、会话和工作目录 |
 | `/session` | 显示当前会话 ID |
-| `/model [name]` | 查看模型；模型切换需要重启运行时 |
+| `/model` | 打开交互式模型选择与 Provider 配置 |
+| `/model <provider>/<model>` | 直接热切换当前会话的模型 |
 | `/init` | 让 agent 检查仓库并生成项目说明 |
 | `/review [scope]` | 让 agent 审查指定范围 |
 | `/compact` | 使用 Harness 原生 command 压缩较早的对话历史 |
@@ -310,7 +318,7 @@ pnpm build
 
 ## 当前限制
 
-- `/model` 只能查看当前 provider/model；切换需要重新启动 `dsh`。
+- `/model` 已支持 session 内热切换；当前 turn 已组装完成的请求不会被中途改写。
 - `/plan` 支持直接进入和通过 `/plan off` 退出；模型调用
   `exit_plan_mode` 时所需的交互式计划审批 UI 尚未接入。
 - 自定义插件目前通过完整 `--cordis` 配置加载，还没有 overlay 和安装管理。
