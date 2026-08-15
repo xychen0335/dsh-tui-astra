@@ -152,8 +152,39 @@ pnpm dev -- --cwd /path/to/project
 | `/model [name]` | 查看模型；模型切换需要重启运行时 |
 | `/init` | 让 agent 检查仓库并生成项目说明 |
 | `/review [scope]` | 让 agent 审查指定范围 |
+| `/compact` | 使用 Harness 原生 command 压缩较早的对话历史 |
+| `/goal [<objective>\|clear\|edit <objective>\|pause\|resume]` | 查看或控制持久化长期目标 |
+| `/plan [off\|message]` | 进入计划模式，或使用 `off` 退出 |
 | `/help` | 显示命令和快捷键帮助 |
 | `/quit`、`/exit` | 退出 |
+
+`/compact`、`/goal` 和 `/plan` 不是写死在 TUI 中的提示词，而是从当前
+Harness runtime 动态发现并直接执行的插件命令。自定义 runtime 注册的其他
+command 也会自动进入 `/` 命令面板。
+
+## 自定义插件
+
+目前允许用户通过 `--cordis <path>` 使用自定义 Harness/Cordis 组合：
+
+```sh
+cp runtime/tui.cordis.yml ~/.config/dsh/my-runtime.cordis.yml
+dsh --cordis ~/.config/dsh/my-runtime.cordis.yml
+```
+
+自定义配置可以加载：
+
+- 已安装且可由 Node.js 解析的 npm 插件；
+- 配置文件引用的本地 JavaScript 插件；
+- Harness 官方插件及其 `config`。
+
+例如一个插件只要向 `ctx.commands` 注册 command，TUI 就会动态发现它，无需
+修改 `src/ui/commands.ts`。当前 `--cordis` 会**替换整套运行时组合**，所以
+配置仍需包含 JSON-RPC server、agent、LLM、session persistence 等基础组件。
+尚未提供插件目录扫描、基础配置 overlay、安装管理或 TUI 开关；这些属于后续
+插件管理里程碑。
+
+> 自定义插件与 TUI 通信时，应复用 Harness 的 command、session event 和 tool
+> 接口，不要向 stdout 输出日志；stdout 已被 JSON-RPC transport 占用。
 
 ## 项目结构
 
@@ -188,10 +219,15 @@ pnpm test
 pnpm build
 ```
 
-运行时组合包含 DeepSeek LLM、bash、本地文件系统、todo、子 agent、会话持久化和上下文压缩。需要调整工具或策略时，可以复制 `runtime/tui.cordis.yml`，修改后通过 `--cordis` 加载。
+运行时组合包含 DeepSeek LLM、bash、本地文件系统、todo、子 agent、持久化
+goal、plan mode、会话持久化和上下文压缩。需要调整工具或策略时，可以复制
+`runtime/tui.cordis.yml`，修改后通过 `--cordis` 加载。
 
 ## 当前限制
 
 - `/model` 只能查看当前模型；切换模型需要重新启动 `dsh`。
+- `/plan` 支持直接进入和通过 `/plan off` 退出；模型调用
+  `exit_plan_mode` 时所需的交互式计划审批 UI 尚未接入。
+- 自定义插件目前通过完整 `--cordis` 配置加载，还没有 overlay 和安装管理。
 - 会话选择器默认展示最近 6 个会话；仍可使用 `/resume <session-id>` 恢复其他会话。
 - `Esc` 通过替换 JSON-RPC 运行时实现中止，因此会有很短的重连过程。

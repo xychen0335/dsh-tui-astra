@@ -40,9 +40,18 @@
       projectRootMarkers: ['.git', 'README.md']
     skills:
       enabled: false
+    goals: {}
     toolBash:
       enableRunInBackground: false
     toolJobs: false
+
+- id: plan-mode
+  name: '@deepseek-ai/dsh-plan-mode'
+  config:
+    section: |
+      You are in plan mode. Inspect the workspace and resolve discoverable
+      facts before proposing changes. Do not modify files or run destructive
+      commands. Present a concise, decision-complete implementation plan.
 
 - id: sessions
   name: '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -96,3 +105,6 @@
 
 - id: command-compact
   name: '@deepseek-ai/dsh-command-compact'
+
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'

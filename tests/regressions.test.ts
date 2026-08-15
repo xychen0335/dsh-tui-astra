@@ -322,6 +322,46 @@ test('runtime command helpers use the exact session agent and preserve direct re
   assert.deepEqual(lines, ['/compact'])
 })
 
+test('runtime command descriptors preserve input hints for goal and plan commands', async () => {
+  const agent = { id: 'session-command-hints' }
+  const server = {
+    sessions: new Map([
+      ['session-command-hints', { handle: { agent } }],
+    ]),
+    ctx: {
+      commands: {
+        list: () => [
+          {
+            name: 'goal',
+            description: 'set or view the goal for a long-running task',
+            input: { hint: '[<objective>|clear|edit <objective>|pause|resume]' },
+          },
+          {
+            name: 'plan',
+            description: 'Enter or leave plan mode',
+            input: { hint: '[off|message]' },
+          },
+        ],
+      },
+    },
+  }
+
+  assert.deepEqual(await listRuntimeCommands(server, 'session-command-hints'), {
+    commands: [
+      {
+        name: 'goal',
+        description: 'set or view the goal for a long-running task',
+        input: { hint: '[<objective>|clear|edit <objective>|pause|resume]' },
+      },
+      {
+        name: 'plan',
+        description: 'Enter or leave plan mode',
+        input: { hint: '[off|message]' },
+      },
+    ],
+  })
+})
+
 test('cursor movement keeps Unicode graphemes intact', () => {
   const text = 'A👨‍👩‍👧‍👦éB'
   const afterA = nextGraphemeBoundary(text, 0)
