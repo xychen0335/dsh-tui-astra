@@ -3,49 +3,138 @@
  *
  * Handles the global Ctrl+C exit path, routes submitted text to the bridge
  * (or handles slash commands), and lays out the fixed chrome (header / status
- * / input) around the two scrollable panels. Panel focus is Ink's own focus
- * manager: Tab cycles the useFocus-registered panels.
+ * / input) around a compact single-column conversation.
  *
  * @module dsh-tui-astra/ui/app
  */
 
+import { useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { Box, Text, useInput } from 'ink'
+import { Box, useInput } from 'ink'
 import type { HarnessBridge } from '../harness/bridge.ts'
 import type { Store } from '../store.ts'
 import { useStore } from '../store.ts'
 import { useTerminalSize } from './size.ts'
 import { Header } from './header.tsx'
 import { Chat } from './chat.tsx'
-import { ActivityPanel } from './activity.tsx'
+import { ActivityFeed } from './activity.tsx'
 import { Status } from './status.tsx'
 import { Input } from './input.tsx'
+import { SessionPicker } from './session-picker.tsx'
+import { classifySessionEvent } from '../harness/events.ts'
+import { listSessions, loadSession } from '../sessions.ts'
+import type { SavedSession } from '../sessions.ts'
 
 export interface AstraAppProps {
   store: Store
   bridge: HarnessBridge
   /** Clean shutdown: close the runtime, then exit with code 0. */
   quit: () => void
+  sessionRoot: string
 }
 
 const KEY_HELP = [
-  'keys: Tab switch panel · PageUp/PageDown scroll · Ctrl+C quit',
-  'commands: /new [id] fresh session · /quit exit · /help this help',
+  'keys: Esc interrupt · / menu · Tab complete · ↑/↓ select/history',
+  'history: scroll/trackpad · Ctrl+↑/↓ line · PgUp/PgDn page · Home/End jump',
+  'commands: /new /resume /sessions /clear /status /session /model',
+  'agent: /init /review · exit: /quit · help: /help',
 ].join('\n')
 
-export function AstraApp({ store, bridge, quit }: AstraAppProps): JSX.Element {
+interface SessionPickerState {
+  sessions: readonly SavedSession[]
+  loading: boolean
+  error?: string
+}
+
+export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): JSX.Element {
   const state = useStore(store)
   const { rows: termRows, columns: termColumns } = useTerminalSize()
+  const [paletteRows, setPaletteRows] = useState(0)
+  const [sessionPicker, setSessionPicker] = useState<SessionPickerState | null>(null)
+  const interrupting = useRef(false)
 
-  const panelHeight = Math.max(3, termRows - 5)
-  const activityWidth = Math.min(56, Math.max(28, Math.floor(termColumns / 3)))
-  const chatWidth = Math.max(20, termColumns - activityWidth - 1)
+  const latestActivity = state.activities[state.activities.length - 1]
+  const activityHeight = Math.min(10, Math.max(3, latestActivity?.text.split('\n').length ?? 1))
+  const pickerRows = sessionPicker === null ? 0 : Math.min(16, 4 + sessionPicker.sessions.length * 2)
+  const chatHeight = Math.max(4, termRows - 10 - activityHeight - paletteRows - pickerRows)
+  const headerWidth = Math.min(68, Math.max(28, termColumns - 2))
 
   useInput((input, key) => {
     if (key.ctrl && input.toLowerCase() === 'c') {
       quit()
+      return
+    }
+    if (key.escape && state.phase === 'running' && !interrupting.current) {
+      interrupting.current = true
+      store.beginInterrupt()
+      void bridge.interrupt()
+        .then(() => {
+          store.applyMany([
+            { kind: 'phase', status: 'idle' },
+            { kind: 'note', text: 'turn interrupted · ready for the next message' },
+          ])
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          store.applyMany([{ kind: 'error', text: `interrupt failed: ${message}` }])
+        })
+        .finally(() => {
+          interrupting.current = false
+        })
     }
   })
+
+  const note = (message: string): void => {
+    store.applyMany([{ kind: 'note', text: message }])
+  }
+
+  const resumeSession = (id: string): void => {
+    if (state.phase === 'running' || state.phase === 'starting') {
+      note('interrupt the current turn with Esc before resuming another session')
+      return
+    }
+    setSessionPicker((current) => current === null ? null : { ...current, loading: true, error: undefined })
+    void loadSession(sessionRoot, id)
+      .then((session) => {
+        if (session === undefined) {
+          setSessionPicker((current) => current === null
+            ? null
+            : { ...current, loading: false, error: `Session not found: ${id}` })
+          note(`session not found: ${id}`)
+          return
+        }
+        bridge.newSession(session.id)
+        store.restoreSession(session.id, session.events.flatMap(classifySessionEvent))
+        setSessionPicker(null)
+        note(`resumed ${session.title ?? session.id} · ${session.workspace}`)
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        setSessionPicker((current) => current === null
+          ? null
+          : { ...current, loading: false, error: message })
+        note(`cannot resume ${id}: ${message}`)
+      })
+  }
+
+  const openSessionPicker = (): void => {
+    if (state.phase === 'running' || state.phase === 'starting') {
+      note('interrupt the current turn with Esc before browsing sessions')
+      return
+    }
+    setSessionPicker({ sessions: [], loading: true })
+    void listSessions(sessionRoot, state.workspace, 6)
+      .then((sessions) => {
+        setSessionPicker({ sessions, loading: false })
+      })
+      .catch((error: unknown) => {
+        setSessionPicker({
+          sessions: [],
+          loading: false,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      })
+  }
 
   const handleSubmit = (text: string): void => {
     if (text.startsWith('/')) {
@@ -68,34 +157,73 @@ export function AstraApp({ store, bridge, quit }: AstraAppProps): JSX.Element {
       case '/new': {
         const id = rest[0]
         const sessionId = bridge.newSession(id)
-        store.setSessionId(sessionId)
-        store.applyMany([{ kind: 'note', text: id === undefined ? 'started a fresh session' : `switched to session ${id}` }])
+        store.resetSession(sessionId)
+        note(id === undefined ? `started session ${sessionId}` : `switched to session ${id}`)
+        return
+      }
+      case '/resume': {
+        const id = rest[0]
+        if (id === undefined) openSessionPicker()
+        else resumeSession(id)
+        return
+      }
+      case '/sessions':
+        openSessionPicker()
+        return
+      case '/clear':
+        store.clearView()
+        note('screen cleared · current session retained')
+        return
+      case '/status':
+        note(`${state.phase} · ${state.provider}/${state.model} · session ${state.sessionId ?? 'none'} · ${state.workspace}`)
+        return
+      case '/session':
+        note(`session: ${state.sessionId ?? 'none'}`)
+        return
+      case '/model': {
+        const requested = rest[0]
+        if (requested === undefined) note(`model: ${state.provider}/${state.model}`)
+        else note(`model changes require a new runtime: restart with dsh --model ${requested}`)
+        return
+      }
+      case '/init':
+        void bridge.send('Inspect this repository and create or update its concise agent instructions file with verified build, test, and project conventions.')
+          .catch((error: unknown) => note(`init failed: ${error instanceof Error ? error.message : String(error)}`))
+        return
+      case '/review': {
+        const scope = rest.join(' ') || 'the current uncommitted changes'
+        void bridge.send(`Review ${scope}. Focus on correctness, regressions, security, and missing tests. Report findings by severity before suggesting fixes.`)
+          .catch((error: unknown) => note(`review failed: ${error instanceof Error ? error.message : String(error)}`))
         return
       }
       case '/help':
-        store.applyMany([{ kind: 'note', text: KEY_HELP }])
+        note(KEY_HELP)
         return
       default:
-        store.applyMany([{ kind: 'note', text: `unknown command: ${command} — try /help` }])
+        note(`unknown command: ${command} — type / to browse commands`)
     }
   }
 
   return (
     <Box flexDirection="column">
-      <Header state={state} />
-      <Box flexDirection="row">
-        <Box width={chatWidth} flexGrow={1}>
-          <Chat store={store} height={panelHeight} />
-        </Box>
-        <ActivityPanel store={store} height={panelHeight} width={activityWidth} />
-      </Box>
-      <Status state={state} />
-      {state.error !== null && (
-        <Box paddingX={1}>
-          <Text color="red" bold>runtime error: {state.error}</Text>
-        </Box>
+      <Header state={state} width={headerWidth} />
+      <Chat store={store} height={chatHeight} width={termColumns} />
+      <ActivityFeed store={store} height={activityHeight} />
+      {sessionPicker !== null && (
+        <SessionPicker
+          sessions={sessionPicker.sessions}
+          loading={sessionPicker.loading}
+          error={sessionPicker.error}
+          onSelect={(session) => { resumeSession(session.id) }}
+          onCancel={() => { setSessionPicker(null) }}
+        />
       )}
-      <Input onSubmit={handleSubmit} />
+      <Input
+        onSubmit={handleSubmit}
+        onPaletteRowsChange={setPaletteRows}
+        isActive={sessionPicker === null}
+      />
+      <Status state={state} width={termColumns} />
     </Box>
   )
 }

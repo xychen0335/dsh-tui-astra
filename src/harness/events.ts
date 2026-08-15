@@ -27,7 +27,7 @@ export type UiAction =
   | { kind: 'context'; provider: string; model: string }
   | { kind: 'turn'; text: string }
   | { kind: 'step'; text: string }
-  | { kind: 'subagent'; text: string; ok?: boolean }
+  | { kind: 'subagent'; id: string; status: 'started' | 'finished'; ok?: boolean }
   | { kind: 'note'; text: string }
   | { kind: 'error'; text: string }
 
@@ -42,9 +42,16 @@ export function contentToText(blocks: readonly ContentBlock[]): string {
 
 const MAX_TOOL_SUMMARY_CHARS = 160
 
-/** One-line summary of a tool result for the activity panel. */
+/**
+ * One-line summary of a tool result for the activity panel.
+ * @param blocks - the tool-result message content; the nested
+ * `tool-result` wrapper is unwrapped before text extraction.
+ */
 export function toolResultSummary(blocks: readonly ContentBlock[]): string {
-  const text = contentToText(blocks).trim()
+  let inner = blocks
+  const first = blocks[0]
+  if (first !== undefined && first.type === 'tool-result') inner = first.content
+  const text = contentToText(inner).trim()
   if (text.length === 0) return '(no output)'
   const singleLine = text.replaceAll(/\s+/g, ' ')
   return singleLine.length <= MAX_TOOL_SUMMARY_CHARS
@@ -58,7 +65,8 @@ export function argsSummary(args: string): string {
   return singleLine.length <= 120 ? singleLine : `${singleLine.slice(0, 119)}…`
 }
 
-function classifySessionEvent(event: SessionEvent): UiAction[] {
+/** Classify one durable session event, also used to rebuild a resumed transcript. */
+export function classifySessionEvent(event: SessionEvent): UiAction[] {
   switch (event.type) {
     case 'user/message': {
       const text = contentToText(event.data.content)
@@ -96,8 +104,11 @@ function classifySessionEvent(event: SessionEvent): UiAction[] {
       return [{ kind: 'context', provider: event.data.provider, model: event.data.model }]
     case 'turn/start':
       return [{ kind: 'turn', text: `turn ${event.data.turn} started` }]
-    case 'turn/end':
-      return [{ kind: 'turn', text: `turn ${event.data.turn} ended (${event.data.reason.kind})` }]
+    case 'turn/end': {
+      const turn = { kind: 'turn' as const, text: `turn ${event.data.turn} ended (${event.data.reason.kind})` }
+      if (event.data.reason.kind !== 'error') return [turn]
+      return [turn, { kind: 'error', text: `${event.data.reason.error.message} (${event.data.reason.error.code})` }]
+    }
     case 'step/start':
       return [{ kind: 'step', text: `step ${event.data.step} of turn ${event.data.turn}` }]
     case 'step/end':
@@ -109,42 +120,71 @@ function classifySessionEvent(event: SessionEvent): UiAction[] {
 
 /**
  * Classify one wire notification into UI actions.
+ *
+ * Notifications for sessions other than the active root session are
+ * dropped: the SDK subscription covers every session in the runtime, and
+ * subagent/old-session events must not leak into the root chat or status.
+ * (Subagent lifecycle stays visible through `subagent.started/finished`.)
+ *
  * @param notification - one server→client notification off the SDK stream.
+ * @param rootSessionId - the session the TUI currently owns.
  * @returns the actions to apply, in order; `[]` when nothing is displayable.
  */
-export function classifyNotification(notification: HarnessNotification): UiAction[] {
-  const params = notification.params as Record<string, unknown>
-  switch (notification.method) {
-    case 'session.event': {
-      const event = (params as { event?: SessionEvent }).event
-      if (event === undefined) {
-        // Bridge-injected transport failure (delivery loop rejection).
-        const error = (params as { error?: unknown }).error
-        return error === undefined ? [] : [{ kind: 'error', text: `transport: ${String(error)}` }]
+export class NotificationClassifier {
+  private rootSessionId: string | undefined
+  private readonly sessionTree = new Set<string>()
+
+  /** Classify one notification against the current root-session tree. */
+  classify(notification: HarnessNotification, rootSessionId: string): UiAction[] {
+    if (this.rootSessionId !== rootSessionId) {
+      this.rootSessionId = rootSessionId
+      this.sessionTree.clear()
+      this.sessionTree.add(rootSessionId)
+    }
+
+    const params = notification.params as Record<string, unknown>
+    switch (notification.method) {
+      case 'session.event': {
+        const sessionId = (params as { sessionId?: string }).sessionId
+        if (sessionId !== undefined && sessionId !== rootSessionId) return []
+        const event = (params as { event?: SessionEvent }).event
+        if (event === undefined) {
+          // Bridge-injected transport failure (delivery loop rejection).
+          const error = (params as { error?: unknown }).error
+          return error === undefined ? [] : [{ kind: 'error', text: `transport: ${String(error)}` }]
+        }
+        if (typeof event.type !== 'string') return []
+        return classifySessionEvent(event)
       }
-      if (typeof event.type !== 'string') return []
-      return classifySessionEvent(event)
+      case 'session.status': {
+        const sessionId = (params as { sessionId?: string }).sessionId
+        if (sessionId !== undefined && sessionId !== rootSessionId) return []
+        const status = (params as { status?: 'idle' | 'running' }).status
+        if (status !== 'idle' && status !== 'running') return []
+        return [{ kind: 'phase', status }]
+      }
+      case 'subagent.started': {
+        const p = params as { parentSessionId?: string; childSessionId?: string }
+        if (p.parentSessionId === undefined || p.childSessionId === undefined) return []
+        if (!this.sessionTree.has(p.parentSessionId)) return []
+        this.sessionTree.add(p.childSessionId)
+        return [{ kind: 'subagent', id: p.childSessionId, status: 'started' }]
+      }
+      case 'subagent.finished': {
+        const p = params as { parentSessionId?: string; childSessionId?: string; status?: 'ok' | 'error' }
+        if (p.childSessionId === undefined) return []
+        const related = this.sessionTree.has(p.childSessionId)
+          || (p.parentSessionId !== undefined && this.sessionTree.has(p.parentSessionId))
+        if (!related) return []
+        return [{
+          kind: 'subagent',
+          id: p.childSessionId,
+          status: 'finished',
+          ok: p.status !== 'error',
+        }]
+      }
+      default:
+        return []
     }
-    case 'session.status': {
-      const status = (params as { status?: 'idle' | 'running' }).status
-      if (status !== 'idle' && status !== 'running') return []
-      return [{ kind: 'phase', status }]
-    }
-    case 'subagent.started': {
-      const child = (params as { childSessionId?: string }).childSessionId
-      if (child === undefined) return []
-      return [{ kind: 'subagent', text: `subagent ${child.slice(0, 12)} started` }]
-    }
-    case 'subagent.finished': {
-      const p = params as { childSessionId?: string; status?: 'ok' | 'error' }
-      if (p.childSessionId === undefined) return []
-      return [{
-        kind: 'subagent',
-        text: `subagent ${p.childSessionId.slice(0, 12)} finished`,
-        ok: p.status !== 'error',
-      }]
-    }
-    default:
-      return []
   }
 }

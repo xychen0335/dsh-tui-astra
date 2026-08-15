@@ -1,33 +1,31 @@
 /**
- * Activity panel — the live event stream (tools, turns, subagents, notes).
+ * Activity feed — a terse inline event stream beneath the transcript.
  *
  * @module dsh-tui-astra/ui/activity
  */
 
-import { useMemo } from 'react'
 import type { JSX } from 'react'
-import { Box, Text, useFocus, useInput } from 'ink'
+import { Box, Text } from 'ink'
 import type { Activity, ActivityKind, Store } from '../store.ts'
 import { useStore } from '../store.ts'
-import { useLineScroll } from './scroll.ts'
 import type { Row, RowColor } from './scroll.ts'
 
 const ICONS: Record<ActivityKind, string> = {
-  tool: '⚙',
-  turn: '▸',
-  step: '·',
-  subagent: '⑂',
-  status: '●',
-  note: 'ⓘ',
-  error: '✖',
+  tool: '•',
+  turn: '◦',
+  step: '  ',
+  subagent: '◦',
+  status: '•',
+  note: '›',
+  error: '×',
 }
 
 const KIND_COLORS: Record<ActivityKind, RowColor> = {
-  tool: 'yellow',
-  turn: 'magenta',
+  tool: 'gray',
+  turn: 'gray',
   step: 'gray',
-  subagent: 'magenta',
-  status: 'cyan',
+  subagent: 'gray',
+  status: 'blue',
   note: 'gray',
   error: 'red',
 }
@@ -37,12 +35,14 @@ export function activityRows(activities: readonly Activity[]): Row[] {
   const rows: Row[] = []
   for (const activity of activities) {
     const color = KIND_COLORS[activity.kind]
-    rows.push({
-      key: `${activity.id}/0`,
-      text: `${ICONS[activity.kind]} ${activity.text}`,
-      color,
-      dim: activity.kind === 'step' || activity.kind === 'note',
-    })
+    for (const [i, line] of activity.text.split('\n').entries()) {
+      rows.push({
+        key: `${activity.id}/${i}`,
+        text: i === 0 ? `${ICONS[activity.kind]} ${line}` : `  ${line}`,
+        color,
+        dim: activity.kind === 'step' || activity.kind === 'note',
+      })
+    }
     if (activity.detail !== undefined) {
       for (const [i, line] of activity.detail.split('\n').entries()) {
         rows.push({ key: `${activity.id}/d${i}`, text: `  ${line}`, dim: true })
@@ -55,32 +55,28 @@ export function activityRows(activities: readonly Activity[]): Row[] {
   return rows
 }
 
-export interface ActivityPanelProps {
+export interface ActivityFeedProps {
   store: Store
   height: number
-  width: number
 }
 
-export function ActivityPanel({ store, height, width }: ActivityPanelProps): JSX.Element {
-  const { isFocused } = useFocus()
+export function ActivityFeed({ store, height }: ActivityFeedProps): JSX.Element {
   const state = useStore(store)
-  const rows = useMemo(() => activityRows(state.activities), [state.activities])
-  const scroll = useLineScroll(rows, height)
-
-  useInput((_input, key) => {
-    if (key.pageUp || key.upArrow) scroll.scrollUp()
-    else if (key.pageDown || key.downArrow) scroll.scrollDown()
-    else if (key.home) scroll.scrollTop()
-    else if (key.end) scroll.scrollBottom()
-  }, { isActive: isFocused })
+  const phaseRow: Row | undefined = state.phase === 'starting'
+    ? { key: 'phase', text: '• Starting runtime…', color: 'blue' }
+    : state.phase === 'running'
+      ? { key: 'phase', text: '• Working…', color: 'yellow' }
+      : undefined
+  const rows = activityRows(state.activities).filter((row) => row.key !== 'empty')
+  const activityLimit = Math.max(0, height - (phaseRow === undefined ? 0 : 1))
+  const visible = activityLimit === 0 ? [] : rows.slice(-activityLimit)
 
   return (
-    <Box flexDirection="column" width={width} height={height} borderStyle="round" borderColor={isFocused ? 'cyan' : 'gray'} paddingX={1}>
-      <Text dimColor>activity</Text>
-      {scroll.visible.map((row) => (
+    <Box flexDirection="column" height={height} paddingX={2}>
+      {phaseRow !== undefined && <Text color={phaseRow.color}>{phaseRow.text}</Text>}
+      {visible.map((row) => (
         <Text key={row.key} color={row.color} dimColor={row.dim}>{row.text}</Text>
       ))}
-      {!scroll.atBottom && <Text dimColor>↑ {rows.length - height} more</Text>}
     </Box>
   )
 }

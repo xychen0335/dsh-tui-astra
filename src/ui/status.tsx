@@ -1,5 +1,5 @@
 /**
- * Status bar — phase label, todo progress, and tool outcome counters.
+ * Footer — quiet model/workspace context and compact progress counters.
  *
  * @module dsh-tui-astra/ui/status
  */
@@ -7,21 +7,16 @@
 import { useMemo } from 'react'
 import type { JSX } from 'react'
 import { Box, Text } from 'ink'
-import type { Activity, UiState } from '../store.ts'
+import type { UiState } from '../store.ts'
 
-const PHASE_LABEL: Record<UiState['phase'], string> = {
-  starting: 'starting runtime…',
-  idle: 'idle',
-  running: 'agent running…',
-  error: 'error',
-}
-
-export function Status({ state }: { state: UiState }): JSX.Element {
+export function Status({ state, width }: { state: UiState; width: number }): JSX.Element {
   const counts = useMemo(() => {
     let ok = 0
     let failed = 0
     for (const activity of state.activities) {
-      if (activity.kind === 'tool') {
+      // Only completed tool results count as outcomes; pending tool-call
+      // activities are not successes.
+      if (activity.kind === 'tool' && activity.result === true) {
         if (activity.error) failed += 1
         else ok += 1
       }
@@ -30,22 +25,23 @@ export function Status({ state }: { state: UiState }): JSX.Element {
   }, [state.activities])
 
   const todoSummary = todoText(state.todos)
-  const subagents = countSubagents(state.activities)
-
+  const context = `${state.provider}/${state.model} · ${state.workspace}`
+  const outcomes = counts.ok + counts.failed === 0 ? '' : ` · tools ${counts.ok}✓ ${counts.failed}✗`
+  const agents = state.activeSubagents === 0 ? '' : ` · agents ${state.activeSubagents}`
+  const progress = `${todoSummary === '' ? '' : ` · ${todoSummary}`}${agents}${outcomes}`
+  const hint = state.phase === 'running' ? 'Esc interrupt' : '/ commands'
+  const footer = truncate(`${hint} · ${context}${progress}`, Math.max(1, width - 2))
   return (
-    <Box justifyContent="space-between" paddingX={1}>
-      <Text>
-        <Text color={state.phase === 'running' ? 'yellow' : state.phase === 'error' ? 'red' : 'green'}>
-          {PHASE_LABEL[state.phase]}
-        </Text>
-        {todoSummary !== '' && <Text dimColor> · {todoSummary}</Text>}
-      </Text>
-      <Text dimColor>
-        {subagents > 0 && `⑂ ${subagents} · `}
-        tools {counts.ok}✓ {counts.failed}✗
-      </Text>
+    <Box paddingX={1}>
+      <Text dimColor>{footer}</Text>
     </Box>
   )
+}
+
+function truncate(text: string, width: number): string {
+  if (text.length <= width) return text
+  if (width <= 1) return '…'
+  return `${text.slice(0, width - 1)}…`
 }
 
 function todoText(todos: readonly UiState['todos'][number][]): string {
@@ -54,12 +50,4 @@ function todoText(todos: readonly UiState['todos'][number][]): string {
   const active = todos.find((todo) => todo.status === 'in_progress')
   const activeText = active === undefined ? '' : ` · ${active.content.slice(0, 40)}`
   return `${done}/${todos.length} todos${activeText}`
-}
-
-function countSubagents(activities: readonly Activity[]): number {
-  let count = 0
-  for (const activity of activities) {
-    if (activity.kind === 'subagent' && activity.text.includes('started')) count += 1
-  }
-  return count
 }

@@ -15,10 +15,11 @@ import { AstraApp } from './ui/app.tsx'
  * @param store - the UI state store.
  * @param bridge - the runtime bridge.
  * @param quit - clean-shutdown callback (Ctrl+C / /quit / SIGTERM).
+ * @param sessionRoot - durable session root used by command discovery.
  * @returns the Ink instance handle.
  */
-export function mountApp(store: Store, bridge: HarnessBridge, quit: () => void): Instance {
-  return render(<AstraApp store={store} bridge={bridge} quit={quit} />, {
+export function mountApp(store: Store, bridge: HarnessBridge, quit: () => void, sessionRoot: string): Instance {
+  return render(<AstraApp store={store} bridge={bridge} quit={quit} sessionRoot={sessionRoot} />, {
     exitOnCtrlC: false,
   })
 }

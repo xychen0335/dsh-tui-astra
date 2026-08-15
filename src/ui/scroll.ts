@@ -20,6 +20,7 @@ export interface Row {
   text: string
   color?: RowColor
   dim?: boolean
+  bold?: boolean
 }
 
 export interface LineScroll {
@@ -27,8 +28,14 @@ export interface LineScroll {
   visible: readonly Row[]
   /** True when the window is pinned at the bottom (auto-follow). */
   atBottom: boolean
-  scrollUp: () => void
-  scrollDown: () => void
+  /** True when the oldest row is visible. */
+  atTop: boolean
+  /** One-based range of the currently visible physical rows. */
+  visibleStart: number
+  visibleEnd: number
+  total: number
+  scrollUp: (lines?: number) => void
+  scrollDown: (lines?: number) => void
   scrollTop: () => void
   scrollBottom: () => void
 }
@@ -41,7 +48,11 @@ export interface LineScroll {
  */
 export function useLineScroll(rows: readonly Row[], maxVisible: number): LineScroll {
   const [offset, setOffset] = useState(0)
-  const atBottom = offset === 0
+  const visibleCapacity = Math.max(1, maxVisible)
+  const maximumOffset = Math.max(0, rows.length - visibleCapacity)
+  const clampedOffset = Math.min(offset, maximumOffset)
+  const atBottom = clampedOffset === 0
+  const atTop = clampedOffset === maximumOffset
   const pinnedRef = useRef(true)
   pinnedRef.current = atBottom
 
@@ -57,27 +68,42 @@ export function useLineScroll(rows: readonly Row[], maxVisible: number): LineScr
     } else if (delta > 0) {
       // Content above the window grows: push the window down by the delta so
       // the same rows stay visible, but never below the clamp.
-      setOffset((current) => Math.min(current + delta, Math.max(0, rows.length - maxVisible)))
+      setOffset((current) => Math.min(current + delta, Math.max(0, rows.length - visibleCapacity)))
+    } else {
+      setOffset((current) => Math.min(current, Math.max(0, rows.length - visibleCapacity)))
     }
-  }, [rows.length, maxVisible, rows])
+  }, [rows.length, visibleCapacity, rows])
 
-  const scrollUp = useCallback(() => {
-    setOffset((current) => Math.min(current + 1, Math.max(0, rows.length - maxVisible)))
-  }, [rows.length, maxVisible])
+  const scrollUp = useCallback((lines = 1) => {
+    setOffset((current) => Math.min(current + Math.max(1, lines), Math.max(0, rows.length - visibleCapacity)))
+  }, [rows.length, visibleCapacity])
 
-  const scrollDown = useCallback(() => {
-    setOffset((current) => Math.max(0, current - 1))
+  const scrollDown = useCallback((lines = 1) => {
+    setOffset((current) => Math.max(0, current - Math.max(1, lines)))
   }, [])
 
   const scrollTop = useCallback(() => {
-    setOffset(Math.max(0, rows.length - maxVisible))
-  }, [rows.length, maxVisible])
+    setOffset(Math.max(0, rows.length - visibleCapacity))
+  }, [rows.length, visibleCapacity])
 
   const scrollBottom = useCallback(() => {
     setOffset(0)
   }, [])
 
-  const visible = rows.slice(Math.max(0, rows.length - maxVisible - offset), rows.length - offset)
+  const visibleEndIndex = rows.length - clampedOffset
+  const visibleStartIndex = Math.max(0, visibleEndIndex - visibleCapacity)
+  const visible = rows.slice(visibleStartIndex, visibleEndIndex)
 
-  return { visible, atBottom, scrollUp, scrollDown, scrollTop, scrollBottom }
+  return {
+    visible,
+    atBottom,
+    atTop,
+    visibleStart: rows.length === 0 ? 0 : visibleStartIndex + 1,
+    visibleEnd: visibleEndIndex,
+    total: rows.length,
+    scrollUp,
+    scrollDown,
+    scrollTop,
+    scrollBottom,
+  }
 }

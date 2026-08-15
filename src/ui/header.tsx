@@ -1,5 +1,5 @@
 /**
- * Header — title, phase dot, session id, and model route.
+ * Header — a compact Codex-style environment card.
  *
  * @module dsh-tui-astra/ui/header
  */
@@ -8,24 +8,21 @@ import type { JSX } from 'react'
 import { Box, Text } from 'ink'
 import type { UiState } from '../store.ts'
 
-const PHASE_DOT: Record<UiState['phase'], { symbol: string; color: string }> = {
-  starting: { symbol: '◌', color: 'blue' },
-  idle: { symbol: '●', color: 'green' },
-  running: { symbol: '◐', color: 'yellow' },
-  error: { symbol: '✖', color: 'red' },
-}
-
-export function Header({ state }: { state: UiState }): JSX.Element {
-  const dot = PHASE_DOT[state.phase]
+export function Header({ state, width }: { state: UiState; width: number }): JSX.Element {
+  const contentWidth = Math.max(12, width - 4)
+  const route = truncate(`${state.provider}/${state.model}`, Math.max(1, contentWidth - 7))
+  const directory = truncate(state.workspace, Math.max(1, contentWidth - 11))
   return (
-    <Box justifyContent="space-between" paddingX={1}>
-      <Text>
-        <Text color={dot.color}>{dot.symbol}</Text> dsh-tui-astra
-        {state.sessionId !== null && <Text dimColor> · {state.sessionId.slice(0, 12)}</Text>}
-      </Text>
-      <Text dimColor>
-        {state.provider}/{state.model}
-      </Text>
+    <Box marginX={1} width={width} flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1}>
+      <Text bold>&gt;_ dsh</Text>
+      <Text><Text dimColor>model:     </Text>{route}</Text>
+      <Text><Text dimColor>directory: </Text>{directory}</Text>
     </Box>
   )
+}
+
+function truncate(text: string, width: number): string {
+  if (text.length <= width) return text
+  if (width <= 1) return '…'
+  return `${text.slice(0, width - 1)}…`
 }
