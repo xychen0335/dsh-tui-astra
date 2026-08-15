@@ -17,7 +17,7 @@
   • dsh
     我先查看项目结构和测试配置。
 
-  scroll/trackpad · Ctrl+↑ history · PgUp page
+  wheel/trackpad · Shift+PgUp/PgDn · terminal search · select/copy
 
 ╭──────────────────────────────────────────────────────────────╮
 │ › Describe a task, @file, or type / for commands             │
@@ -29,7 +29,7 @@
 
 - 实时渲染用户消息、助手回复、推理、工具调用、turn/step 状态和 token 用量。
 - 输入 `/` 打开命令面板，支持方向键选择、Tab 补全和输入历史。
-- 使用鼠标滚轮、触控板或键盘连续浏览长对话；中文、emoji 和终端自动换行均按实际显示宽度计算。
+- 使用鼠标滚轮、触控板或终端原生快捷键浏览长对话（通常为 `Shift+PageUp/PageDown`；macOS 终端也可使用其 terminal-native shortcut），并使用终端搜索、拖选和复制；中文、emoji 和终端自动换行均按实际显示宽度计算。
 - `Esc` 中止当前回合；运行时重启后保留同一会话，并可立即继续发送消息。
 - `/resume` 提供可选择的历史会话列表，展示标题、更新时间、工作目录和缩略会话 ID。
 - 自动读取原生 Harness 的普通或 Zstandard 压缩 JSONL 会话。
@@ -200,17 +200,17 @@ history，不提供 `--api-key <value>` 参数。也可以在 TUI 中执行 `/pr
 
 | 按键 | 动作 |
 |---|---|
-| 鼠标滚轮 / 触控板 | 滚动对话历史 |
-| `Ctrl+↑` / `Ctrl+↓` | 逐行滚动历史 |
-| `PageUp` / `PageDown` | 整页滚动历史 |
-| `Home` / `End` | 跳到最早消息 / 最新消息 |
+| 鼠标滚轮 / 触控板 | 使用终端原生 scrollback 滚动对话历史 |
+| `Shift+PageUp` / `Shift+PageDown` | 常见终端原生整页滚动快捷键（macOS 终端请使用其 terminal-native shortcut） |
+| 终端搜索 | 使用终端自己的搜索功能查找已提交的对话内容 |
+| 拖选 / 复制 | 使用终端原生选择和复制 |
 | `↑` / `↓` | 选择命令、选择会话或浏览输入历史 |
 | `Tab` | 补全当前命令 |
 | `Enter` | 发送消息或确认选择 |
 | `Esc` | 中止当前回合，或关闭会话选择器 |
 | `Ctrl+C` | 退出并关闭运行时 |
 
-启用终端鼠标事件后，如需选择和复制终端文字，请按住 `Shift` 再拖动。
+应用不启用鼠标捕获；滚轮、触控板、终端搜索、拖选和复制均由终端处理。
 
 ## 斜杠命令
 
@@ -307,11 +307,11 @@ src/
   store.ts                TUI 状态与会话恢复
   ui/
     app.tsx               布局、全局按键和斜杠命令
-    chat.tsx              对话渲染、宽度换行和鼠标滚动
+    chat.tsx              对话渲染和宽度换行
     input.tsx             输入框、命令面板和输入历史
     session-picker.tsx    历史会话选择器
     activity.tsx          工具和运行阶段动态
-    scroll.ts             自动跟随与历史滚动窗口
+    row.ts                对话和活动行的共享显示类型
 runtime/
   tui.cordis.yml          Harness 运行时组合
 tests/
