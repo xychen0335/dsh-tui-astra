@@ -15,7 +15,6 @@ import type { HarnessBridge } from '../harness/bridge.ts'
 import type { Store } from '../store.ts'
 import { useStore } from '../store.ts'
 import { useTerminalSize } from './size.ts'
-import { Header } from './header.tsx'
 import { Chat } from './chat.tsx'
 import { ActivityFeed } from './activity.tsx'
 import { Status } from './status.tsx'
@@ -48,7 +47,7 @@ export interface AstraAppProps {
 
 const KEY_HELP = [
   'keys: Esc interrupt · / menu · Tab complete · ↑/↓ select/history',
-  'history: scroll/trackpad · Ctrl+↑/↓ line · PgUp/PgDn page · Home/End jump',
+  'history: wheel/trackpad · Shift+PgUp/PgDn · terminal search · select/copy',
   'commands: /new /resume /sessions /clear /status /session /model /provider',
   'agent: /init /review · exit: /quit · help: /help',
 ].join('\n')
@@ -83,8 +82,9 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
   const modelRows = modelPicker === null
     ? 0
     : Math.min(18, modelPicker.loading ? 3 : 3 + modelPicker.groups.reduce((sum, group) => sum + group.models.length, 1))
-  const chatHeight = Math.max(4, termRows - 10 - activityHeight - paletteRows - pickerRows - modelRows)
-  const headerWidth = Math.min(68, Math.max(28, termColumns - 2))
+  // Header and completed transcript rows are terminal scrollback now. Keep
+  // only the live stream plus activity/composer/status in the dynamic frame.
+  const chatHeight = Math.max(4, termRows - 5 - activityHeight - paletteRows - pickerRows - modelRows)
 
   useInput((input, key) => {
     if (key.ctrl && input.toLowerCase() === 'c') {
@@ -375,7 +375,7 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
         return
       case 'clear':
         store.clearView()
-        note('screen cleared · current session retained')
+        note('new transcript batch · current session retained (older output remains in terminal scrollback)')
         return
       case 'status':
         note(`${state.phase} · ${state.provider}/${state.model} · session ${state.sessionId ?? 'none'} · ${state.workspace}`)
@@ -422,7 +422,6 @@ export function AstraApp({ store, bridge, quit, sessionRoot }: AstraAppProps): J
 
   return (
     <Box flexDirection="column">
-      <Header state={state} width={headerWidth} />
       <Chat store={store} height={chatHeight} width={termColumns} />
       <ActivityFeed store={store} height={activityHeight} />
       {sessionPicker !== null && (

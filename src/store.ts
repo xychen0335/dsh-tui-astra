@@ -39,6 +39,15 @@ export interface Activity {
 export interface UiState {
   phase: 'starting' | 'idle' | 'running' | 'error'
   sessionId: string | null
+  /**
+   * Monotonic key for the append-only terminal transcript.
+   *
+   * Ink's Static component keeps an internal item-length cursor. A new
+   * generation remounts that component when the visible session is replaced
+   * or cleared, while already committed terminal output remains historical
+   * scrollback.
+   */
+  transcriptGeneration: number
   provider: string
   model: string
   workspace: string
@@ -63,6 +72,7 @@ export class Store {
     this.state = {
       phase: 'starting',
       sessionId: null,
+      transcriptGeneration: 0,
       provider: initial.provider,
       model: initial.model,
       workspace: initial.workspace,
@@ -107,6 +117,7 @@ export class Store {
     this.state = {
       ...this.state,
       ...(sessionId === undefined ? {} : { sessionId }),
+      transcriptGeneration: this.state.transcriptGeneration + 1,
       phase: 'idle',
       messages: [],
       activities: [],
@@ -127,6 +138,7 @@ export class Store {
     this.state = {
       ...this.state,
       sessionId,
+      transcriptGeneration: this.state.transcriptGeneration + 1,
       phase: 'idle',
       messages: [],
       activities: [],
@@ -163,10 +175,17 @@ export class Store {
     for (const listener of this.listeners) listener()
   }
 
-  /** Clear transient screen content without changing or deleting the session. */
+  /**
+   * Start a fresh visible transcript without changing the session.
+   *
+   * Ink Static has already committed prior output to terminal scrollback, so
+   * this cannot retroactively erase that historical output. The generation
+   * lets the new batch render independently and accept future messages.
+   */
   clearView(): void {
     this.state = {
       ...this.state,
+      transcriptGeneration: this.state.transcriptGeneration + 1,
       messages: [],
       activities: [],
       error: null,

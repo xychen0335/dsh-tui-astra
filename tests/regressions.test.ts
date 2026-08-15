@@ -15,7 +15,7 @@ import { NotificationClassifier, classifySessionEvent } from '../src/harness/eve
 import { Store } from '../src/store.ts'
 import { listSessions, loadSession, projectKey, scanZstdFrames } from '../src/sessions.ts'
 import { activityRows } from '../src/ui/activity.tsx'
-import { chatRows, wrapRows } from '../src/ui/chat.tsx'
+import { Chat, chatRows, wrapRows } from '../src/ui/chat.tsx'
 import { Input } from '../src/ui/input.tsx'
 import {
   LOCAL_COMMANDS,
@@ -933,6 +933,214 @@ test('input palette height reports once across parent rerenders', async () => {
     rerender?.()
     await new Promise((resolve) => setTimeout(resolve, 20))
     assert.deepEqual(reports, [0])
+  } finally {
+    instance.unmount()
+  }
+})
+
+test('Chat leaves terminal mouse tracking to native selection', async () => {
+  const stdin = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    setRawMode: (enabled: boolean) => void
+    ref: () => void
+    unref: () => void
+  }
+  stdin.isTTY = true
+  stdin.setRawMode = () => {}
+  stdin.ref = () => {}
+  stdin.unref = () => {}
+  const stdout = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    columns: number
+    rows: number
+  }
+  stdout.isTTY = true
+  stdout.columns = 80
+  stdout.rows = 24
+  const stderr = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    columns: number
+    rows: number
+  }
+  stderr.isTTY = false
+  stderr.columns = 80
+  stderr.rows = 24
+
+  let output = ''
+  stdout.on('data', (chunk: Buffer | string) => {
+    output += chunk.toString()
+  })
+  const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
+  const instance = render(createElement(Chat, { store, height: 8, width: 80 }), {
+    stdin,
+    stdout,
+    stderr,
+    exitOnCtrlC: false,
+  })
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(output.includes('\u001b[?1000h'), false)
+    assert.equal(output.includes('\u001b[?1006h'), false)
+    assert.equal(stdin.listenerCount('data'), 0)
+
+    const outputBeforeUnmount = output
+    instance.unmount()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(output.slice(outputBeforeUnmount.length).includes('\u001b[?1000l'), false)
+    assert.equal(output.slice(outputBeforeUnmount.length).includes('\u001b[?1006l'), false)
+    assert.equal(stdin.listenerCount('data'), 0)
+  } finally {
+    instance.unmount()
+  }
+})
+
+test('Chat commits completed messages once while streaming stays dynamic', async () => {
+  const stdin = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    setRawMode: (enabled: boolean) => void
+    ref: () => void
+    unref: () => void
+  }
+  stdin.isTTY = false
+  stdin.setRawMode = () => {}
+  stdin.ref = () => {}
+  stdin.unref = () => {}
+  const stdout = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    columns: number
+    rows: number
+  }
+  stdout.isTTY = false
+  stdout.columns = 80
+  stdout.rows = 24
+  const stderr = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    columns: number
+    rows: number
+  }
+  stderr.isTTY = false
+  stderr.columns = 80
+  stderr.rows = 24
+
+  const chunks: string[] = []
+  stdout.on('data', (chunk: Buffer | string) => { chunks.push(chunk.toString()) })
+  const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
+  const instance = render(createElement(Chat, { store, height: 8, width: 80 }), {
+    stdin,
+    stdout,
+    stderr,
+    exitOnCtrlC: false,
+  })
+  const waitForOutput = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+
+  try {
+    await waitForOutput()
+    const bannerChunks = chunks.length
+    store.applyMany([{ kind: 'user-message', id: 'user-1', text: 'prompt', injected: false }])
+    await waitForOutput()
+    assert.equal(chunks.length, bannerChunks + 1)
+    assert.equal(chunks.at(-1)?.includes('prompt'), true)
+
+    store.applyMany([{ kind: 'assistant-text', text: 'partial' }])
+    await waitForOutput()
+    // With CI=true Ink writes newly committed Static output to stdout but
+    // keeps ordinary dynamic frames in its last-output slot.
+    const beforeDelta = chunks.length
+    assert.equal(store.getState().messages.at(-1)?.text, 'partial')
+    assert.equal(chunks.length, beforeDelta)
+
+    store.applyMany([{ kind: 'assistant-text', text: ' answer' }])
+    await waitForOutput()
+    assert.equal(chunks.length, beforeDelta)
+    assert.equal(store.getState().messages.at(-1)?.text, 'partial answer')
+
+    store.applyMany([{ kind: 'assistant-done' }])
+    await waitForOutput()
+    assert.equal(chunks.length, beforeDelta + 1)
+    assert.equal(store.getState().messages.at(-1)?.streaming, false)
+    assert.equal(store.getState().messages.at(-1)?.text, 'partial answer')
+    assert.equal(chunks.filter((chunk) => chunk.includes('partial answer')).length, 1)
+
+    const afterCompletion = chunks.length
+    store.applyMany([{ kind: 'note', text: 'dynamic activity' }])
+    await waitForOutput()
+    assert.equal(chunks.length, afterCompletion)
+    assert.equal(store.getState().messages.at(-1)?.streaming, false)
+  } finally {
+    instance.unmount()
+  }
+})
+
+test('Chat starts a fresh Static batch after reset, restore, and clear', async () => {
+  const stdin = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    setRawMode: (enabled: boolean) => void
+    ref: () => void
+    unref: () => void
+  }
+  stdin.isTTY = false
+  stdin.setRawMode = () => {}
+  stdin.ref = () => {}
+  stdin.unref = () => {}
+  const stdout = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    columns: number
+    rows: number
+  }
+  stdout.isTTY = false
+  stdout.columns = 80
+  stdout.rows = 24
+  const stderr = new PassThrough() as PassThrough & {
+    isTTY: boolean
+    columns: number
+    rows: number
+  }
+  stderr.isTTY = false
+  stderr.columns = 80
+  stderr.rows = 24
+
+  const output: string[] = []
+  stdout.on('data', (chunk: Buffer | string) => { output.push(chunk.toString()) })
+  const store = new Store({ provider: 'provider', model: 'model', workspace: '/tmp' })
+  const instance = render(createElement(Chat, { store, height: 8, width: 80 }), {
+    stdin,
+    stdout,
+    stderr,
+    exitOnCtrlC: false,
+  })
+  const waitForOutput = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+
+  try {
+    await waitForOutput()
+    store.applyMany([{ kind: 'user-message', id: 'old', text: 'old batch', injected: false }])
+    await waitForOutput()
+    store.resetSession('new')
+    await waitForOutput()
+    store.applyMany([{ kind: 'user-message', id: 'new', text: 'new batch', injected: false }])
+    await waitForOutput()
+    store.restoreSession('saved', [
+      { kind: 'user-message', id: 'restored', text: 'restored prompt', injected: false },
+    ])
+    await waitForOutput()
+    store.applyMany([{ kind: 'assistant-text', text: 'future answer' }])
+    await waitForOutput()
+    store.applyMany([{ kind: 'assistant-done' }])
+    await waitForOutput()
+    store.clearView()
+    await waitForOutput()
+    store.applyMany([{ kind: 'user-message', id: 'after-clear', text: 'after clear', injected: false }])
+    await waitForOutput()
+
+    const text = output.join('')
+    assert.equal(text.includes('new batch'), true)
+    assert.equal(text.includes('restored prompt'), true)
+    assert.equal(text.includes('future answer'), true)
+    assert.equal(text.includes('after clear'), true)
+    assert.equal(store.getState().transcriptGeneration, 3)
   } finally {
     instance.unmount()
   }

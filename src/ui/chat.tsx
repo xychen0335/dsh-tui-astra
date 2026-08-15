@@ -1,53 +1,60 @@
 /**
  * Chat panel — the conversation surface.
  *
- * Renders store messages as flat rows (one per wrapped line), auto-follows
- * the newest output, and scrolls with PageUp/PageDown/arrows when focused.
+ * Completed messages are committed once to Ink Static so the terminal owns
+ * transcript scrollback, selection, copy, and search. Only the trailing
+ * streaming assistant message stays in Ink's dynamic render area.
  *
  * @module dsh-tui-astra/ui/chat
  */
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useMemo } from 'react'
 import type { JSX } from 'react'
-import { Box, Text, useInput, useStdin, useStdout } from 'ink'
-import type { Store, UiState } from '../store.ts'
+import { Box, Static, Text } from 'ink'
+import type { ChatMessage, Store, UiState } from '../store.ts'
 import { useStore } from '../store.ts'
-import { useLineScroll } from './scroll.ts'
-import type { Row } from './scroll.ts'
+import type { Row } from './row.ts'
+import { Header } from './header.tsx'
 
 /** All logical chat rows, before terminal-width wrapping. */
 export function chatRows(state: UiState): Row[] {
   const rows: Row[] = []
   for (const message of state.messages) {
-    rows.push({
-      key: `${message.id}/head`,
-      text: message.role === 'user' ? '› You' : '• dsh',
-      bold: true,
-    })
-    if (message.reasoning !== '') {
-      for (const [i, line] of message.reasoning.split('\n').entries()) {
-        rows.push({ key: `${message.id}/r${i}`, text: `  ${line}`, dim: true })
-      }
-    }
-    if (message.text === '' && message.streaming) {
-      rows.push({ key: `${message.id}/wait`, text: '…', dim: true })
-    } else if (message.text !== '') {
-      for (const [i, line] of message.text.split('\n').entries()) {
-        rows.push({
-          key: `${message.id}/t${i}`,
-          text: `  ${line}`,
-        })
-      }
-    }
-    if (message.streaming && message.text !== '') {
-      rows.push({ key: `${message.id}/cur`, text: '  ▍', color: 'blue' })
-    }
-    if (!message.streaming && message.usage !== undefined) {
-      rows.push({ key: `${message.id}/usage`, text: usageText(message.usage), dim: true })
-    }
+    rows.push(...messageRows(message))
   }
   if (rows.length === 0) {
     rows.push({ key: 'empty', text: 'Start a task, ask a question, or type /help.', dim: true })
+  }
+  return rows
+}
+
+/** All logical rows for one message, before terminal-width wrapping. */
+export function messageRows(message: ChatMessage): Row[] {
+  const rows: Row[] = [{
+    key: `${message.id}/head`,
+    text: message.role === 'user' ? '› You' : '• dsh',
+    bold: true,
+  }]
+  if (message.reasoning !== '') {
+    for (const [i, line] of message.reasoning.split('\n').entries()) {
+      rows.push({ key: `${message.id}/r${i}`, text: `  ${line}`, dim: true })
+    }
+  }
+  if (message.text === '' && message.streaming) {
+    rows.push({ key: `${message.id}/wait`, text: '…', dim: true })
+  } else if (message.text !== '') {
+    for (const [i, line] of message.text.split('\n').entries()) {
+      rows.push({
+        key: `${message.id}/t${i}`,
+        text: `  ${line}`,
+      })
+    }
+  }
+  if (message.streaming && message.text !== '') {
+    rows.push({ key: `${message.id}/cur`, text: '  ▍', color: 'blue' })
+  }
+  if (!message.streaming && message.usage !== undefined) {
+    rows.push({ key: `${message.id}/usage`, text: usageText(message.usage), dim: true })
   }
   return rows
 }
@@ -118,60 +125,81 @@ export interface ChatProps {
   width: number
 }
 
+interface TranscriptBanner {
+  kind: 'banner'
+  provider: string
+  model: string
+  workspace: string
+}
+
+interface TranscriptMessage {
+  kind: 'message'
+  message: ChatMessage
+}
+
+type TranscriptItem = TranscriptBanner | TranscriptMessage
+
 export function Chat({ store, height, width }: ChatProps): JSX.Element {
   const state = useStore(store)
-  const { stdin } = useStdin()
-  const { stdout } = useStdout()
   const contentWidth = Math.max(1, width - 4)
-  const viewportHeight = Math.max(1, height - 2)
-  const rows = useMemo(() => wrapRows(chatRows(state), contentWidth), [contentWidth, state])
-  const scroll = useLineScroll(rows, viewportHeight)
-  const mouseScrollRef = useRef({ up: scroll.scrollUp, down: scroll.scrollDown })
-  mouseScrollRef.current = { up: scroll.scrollUp, down: scroll.scrollDown }
-
-  useEffect(() => {
-    if (!stdin.isTTY || !stdout.isTTY) return
-
-    const handleMouse = (chunk: Buffer | string): void => {
-      const input = chunk.toString()
-      const events = input.matchAll(/\u001b\[<(\d+);\d+;\d+[Mm]/g)
-      for (const event of events) {
-        const button = Number(event[1])
-        if ((button & 64) === 0) continue
-        if ((button & 1) === 0) mouseScrollRef.current.up(3)
-        else mouseScrollRef.current.down(3)
-      }
-    }
-
-    // Normal mouse tracking includes wheel/trackpad events; SGR mode keeps
-    // coordinates unambiguous. Hold Shift for native terminal text selection.
-    stdout.write('\u001b[?1000h\u001b[?1006h')
-    stdin.on('data', handleMouse)
-    return () => {
-      stdin.off('data', handleMouse)
-      stdout.write('\u001b[?1006l\u001b[?1000l')
-    }
-  }, [stdin, stdout])
-
-  useInput((_input, key) => {
-    if (key.pageUp) scroll.scrollUp(viewportHeight)
-    else if (key.pageDown) scroll.scrollDown(viewportHeight)
-    else if (key.ctrl && key.upArrow) scroll.scrollUp()
-    else if (key.ctrl && key.downArrow) scroll.scrollDown()
-    else if (key.home) scroll.scrollTop()
-    else if (key.end) scroll.scrollBottom()
-  })
+  const headerWidth = Math.min(68, Math.max(28, width - 2))
+  const transcriptItems = useMemo<TranscriptItem[]>(() => [
+    {
+      kind: 'banner',
+      provider: state.provider,
+      model: state.model,
+      workspace: state.workspace,
+    },
+    ...state.messages
+      .filter((message) => !message.streaming)
+      .map((message): TranscriptMessage => ({ kind: 'message', message })),
+  ], [state.messages, state.provider, state.model, state.workspace])
+  const streamingMessage = state.messages[state.messages.length - 1]?.streaming
+    ? state.messages[state.messages.length - 1]
+    : undefined
+  const streamingRows = streamingMessage === undefined
+    ? []
+    : wrapRows(messageRows(streamingMessage), contentWidth)
 
   return (
-    <Box flexDirection="column" height={height} paddingX={2} paddingTop={1}>
-      {scroll.visible.map((row) => (
-        <Text key={row.key} color={row.color} dimColor={row.dim} bold={row.bold}>{row.text}</Text>
-      ))}
-      <Text dimColor wrap="truncate-end">
-        {scroll.atBottom
-          ? '  scroll/trackpad · Ctrl+↑ history · PgUp page'
-          : `  ${scroll.atTop ? 'top' : '↑ older'} · ${scroll.visibleStart}–${scroll.visibleEnd}/${scroll.total} · scroll · PgUp/PgDn · End latest`}
-      </Text>
-    </Box>
+    <>
+      <Static
+        key={state.transcriptGeneration}
+        items={transcriptItems}
+      >
+        {(item, index) => {
+          if (item.kind === 'banner') {
+            const bannerState = {
+              ...state,
+              provider: item.provider,
+              model: item.model,
+              workspace: item.workspace,
+            }
+            return <Header key={`banner/${index}`} state={bannerState} width={headerWidth} />
+          }
+          const rows = wrapRows(messageRows(item.message), contentWidth)
+          return (
+            <Box
+              key={`${item.message.role}/${item.message.id}`}
+              flexDirection="column"
+              paddingX={2}
+              paddingTop={index === 1 ? 1 : 0}
+            >
+              {rows.map((row) => (
+                <Text key={row.key} color={row.color} dimColor={row.dim} bold={row.bold}>{row.text}</Text>
+              ))}
+            </Box>
+          )
+        }}
+      </Static>
+      <Box flexDirection="column" height={height} paddingX={2} paddingTop={1}>
+        {state.messages.length === 0 && (
+          <Text dimColor>Start a task, ask a question, or type /help.</Text>
+        )}
+        {streamingRows.map((row) => (
+          <Text key={row.key} color={row.color} dimColor={row.dim} bold={row.bold}>{row.text}</Text>
+        ))}
+      </Box>
+    </>
   )
 }

@@ -8,7 +8,7 @@ import type { JSX } from 'react'
 import { Box, Text } from 'ink'
 import type { Activity, ActivityKind, Store } from '../store.ts'
 import { useStore } from '../store.ts'
-import type { Row, RowColor } from './scroll.ts'
+import type { Row, RowColor } from './row.ts'
 
 const ICONS: Record<ActivityKind, string> = {
   tool: '•',
